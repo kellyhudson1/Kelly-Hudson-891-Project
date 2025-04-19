@@ -1,0 +1,13 @@
+wbCtyIncClass,ldf,demUnit,ssp,2020_ref,percChange_ref,percChange_rm50LAllCty,percChange_rm100LAllCty,percChange_rm50LHiCty,percChange_rm100LHiCty
+HIC,Beef,perPersKg,SSP2,3–44,-1–95,-5–73,-27–51,-8–69,-31–46
+HIC,Sheep,perPersKg,SSP2,0–22,0–107,0–119,0–128,-1–80,-21–57
+HIC,Pork,perPersKg,SSP2,3–66,-8–184,-9–123,-28–75,-11–118,-28–67
+LMIC,Beef,perPersKg,SSP2,0–58,-8–323,-17–120,-54–38,-8–325,-7–328
+LMIC,Sheep,perPersKg,SSP2,0–60,4–200,-5–100,-23–97,4–201,5–202
+LMIC,Pork,perPersKg,SSP2,0–42,-6–238,-18–76,-59–41,-5–241,-4–244
+HIC,Beef,Tot000Tons,SSP2,2–14880,-9–114,-9–89,-32–78,-12–85,-35–60
+HIC,Sheep,Tot000Tons,SSP2,0–359,-2–126,2–139,-6–150,-7–97,-24–72
+HIC,Pork,Tot000Tons,SSP2,5–9550,-6–210,-9–144,-32–91,-14–138,-33–83
+LMIC,Beef,Tot000Tons,SSP2,0–12352,-22–597,-28–260,-45–133,-22–601,-22–604
+LMIC,Sheep,Tot000Tons,SSP2,0–6251,0–373,-14–233,-35–185,1–374,1–376
+LMIC,Pork,Tot000Tons,SSP2,0–57604,-18–475,-28–238,-51–99,-17–480,-17–484

@@ -1,0 +1,46 @@
+---
+title: "Untitled"
+author: "Kelly Hudson"
+date: "2025-04-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+# Description: this is the master file that runs all scripts in 'project_ldfDemand.Rproj' 
+# sequentially from start to finish to reproduce all tables and figures that
+# report results in the study 
+# The simulation results were generated in GAMS and therefore outside of this script, 
+# please direct questions on the GAMS code and input data to the author
+
+# list all R files in project
+fileNames <- list.files(path = "dataverse_files", pattern = "R$")
+class(fileNames)
+fileNames
+# number of files in "scripts" folder to run 
+# minus one as don't need to run the masterFile twice
+# minus N if don't want to run last N files
+nFiles <- length(fileNames) - 1
+nFiles
+
+# time all script run time
+startTimingAll <- proc.time()
+
+# run all files in the "scripts" folder
+for (i in 1:nFiles) {
+  source(paste0(fileNames[i], sep = ""), echo = TRUE)
+}
+
+timeAll <- proc.time() - startTimingAll
+timeAll
+```
+

@@ -1,0 +1,5000 @@
+---
+title: "Kelly Hudson AFRE 891 Data Replication Project"
+author: "Original Paper by Adam Komarek"
+date: "2025-04-19"
+output: html_document
+---
+
+## Introduction:
+
+This replication package contains 16 raw data .csv files, 1 raw data excel file,
+17 R-scripts and a readMe file. 
+
+16 of the R-scripts are written with the purpose of cleaning and processing various portions of the raw data. The 17th R-script is a program that reads and runs each of the other 16 R-scripts to generate and save all figures from the study. 
+
+I did not use the master file for this project but included the code for it at the end of this document. The readMe file and comments within the master file explain how to use the program
+
+While this replication package generates a total of 24 tables and figures, the paper itself displays only 5 figures and 3 tables. The names of the other tables and figures are listed at the end of this document but will not be rendered in the html file. The tables will need to be formatted using the code:
+
+tablename <- data.frame(lapply(df, function(x) {
+  if (is.character(x)) iconv(x, from = "", to = "UTF-8", sub = "byte") else x
+}), stringsAsFactors = FALSE)
+
+knitr::kable(tablename, "pipe")
+
+to knit and display in a presentable maner
+
+The replication process is for this paper is simple. Other than formatting the tables, the only addition I had to make to the code was to add a section at the end to print each figure. 
+
+Each of the following sections contains one of the R-script files from the 
+replication package with the original comments.
+
+The packages used for replication are found in the setup code chunk. Some packages
+(zoo, readxl, RColorBrewer, sf, rnaturalearth, and viridis) may need to be installed prior to running the replication code. 
+
+Link to paper: https://doi.org/10.1016/j.gloenvcha.2021.102343
+
+```{r setup, include=FALSE}
+
+library("readxl")
+library("data.table")
+library("zoo")
+library("ggplot2")
+library("ggpubr")
+library("RColorBrewer")
+library("scales")
+library("dplyr")
+library("sf")
+library("rnaturalearth")
+library("viridis")
+library("knitr")
+
+knitr::opts_chunk$set(warning = FALSE,
+                      message = FALSE,
+                      fig.align = "center",
+                      fig.width = 8,
+                      fig.height = 5,
+                      out.width = "100%"
+                      )
+
+# disable scientific notation
+options(scipen = 999)
+
+```
+
+
+
+```{r cleaning location data, include=FALSE}
+# 1) assign all impact cty (3 letter cty code) to a Standard-IMPACT region
+# and a WB cty class
+
+# 2) assign all fao cty (3 letter cty code) to a Standard-IMPACT region,
+# impact cty, and WB cty class
+
+# use the 8 region aggregation in IMPACT (Standard-IMPACT):
+# SAS	South Asia	
+# SSA	sub-Saharan Africa	
+# EUR	Europe	
+# LAC	Latin America and Caribbean	
+# FSU	Former Soviet Union	
+# EAP	East Asia and Pacific	
+# NAM	North America	
+# MEN	Middle East and North Africa	
+
+
+# IMPACT MAPPING================================================================
+
+# assign FAO region and IMPACT region to IMPACT cty code
+impCtyReg_dt <- data.table(read_xlsx(path = "rawData_ctyRegMapping.xlsx",
+                                  sheet = "impactCtyReg"))
+
+# keep IMPACT cty, IMPACT 8 regions
+colnames(impCtyReg_dt)
+
+# select col to keep
+impCtyReg_dt <- impCtyReg_dt[, c("Cty",       # impact country 3 letter code 
+                           "Standard-IMPACT...15", # impact 8 regions
+                           "LongName")]
+# rename cols
+colnames(impCtyReg_dt) <- c("cty",
+                         "reg",
+                         "impCountryAbb")
+
+# WB classification of impact cty (cty)
+# load world bank country classification
+wbCtyClassRaw_dt <- data.table(read_xlsx(path = "rawData_ctyRegMapping.xlsx",
+                                     sheet = "WB",
+                                     skip = 5))
+
+# keep columns and complete cases
+wbCtyClassImp_dt <- wbCtyClassRaw_dt[, c("x...3",
+                                         "x...4",
+                                   "x...7")]
+wbCtyClassImp_dt <- wbCtyClassImp_dt[complete.cases(wbCtyClassImp_dt), ]
+
+# rename so can merge with impact cty
+colnames(wbCtyClassImp_dt) <- c("wbCountry",
+                                "cty",
+                                "wbCtyIncClass")
+
+
+# merge impact and WB dcty lists
+impCtyReg_dt <- merge(wbCtyClassImp_dt, impCtyReg_dt, 
+                        by = "cty",
+                        all.y = TRUE)
+
+# some impact cty has different names to WB cty names, 
+# because of different naming conventions
+# and aggregations of cty in IMPACT
+
+# so manually add cty income class where is NA
+impCtyReg_dt[(impCountryAbb == "Morocco"), 
+             wbCtyIncClass := "Lower middle income"] 
+
+impCtyReg_dt[(impCountryAbb == "China" |
+                impCountryAbb == "Guyanas" |
+                impCountryAbb == "Other Balkans" |
+                impCountryAbb == "Other Indian Ocean" |
+                impCountryAbb == "Other Pacific Ocean" |
+                impCountryAbb == "Other Caribbean"), 
+             wbCtyIncClass := "Upper middle income"] 
+
+impCtyReg_dt[(impCountryAbb == "Baltic States" |
+                impCountryAbb == "Belgium-Luxembourg" |
+                impCountryAbb == "Switzerland" |
+                impCountryAbb == "Finland" |
+                impCountryAbb == "France" |
+                impCountryAbb == "Italy" |
+                impCountryAbb == "UK" |
+                impCountryAbb == "Spain" | 
+                impCountryAbb == "Rest of Arabia" |
+                impCountryAbb == "Other Southeast Asia" |
+                impCountryAbb == "Other Atlantic"),
+             wbCtyIncClass := "High income"] 
+
+
+# add impact full cty name
+impactISO_dt <- data.table(read_xlsx(path = "rawData_ctyRegMapping.xlsx",
+                                         sheet = "impactISO"))
+
+# keep columns and complete cases
+colnames(impactISO_dt) <- c("cty",
+                                "impCountry",
+                                "isoCountry",
+                                "isoCty")
+impactISOImp_dt <- impactISO_dt[, c("cty", "impCountry")]
+
+
+# merge impact and WB cty lists
+impCtyReg_dt <- merge(impactISOImp_dt,
+                          impCtyReg_dt, 
+                      by = "cty",
+                      all.x = FALSE)
+
+
+# remove Jersey isoCTy as it is part of UKP/GBR
+# and is not sperate in FAOSTAT or IMPACT results
+impCtyReg_dt$dupImpCty <- duplicated(impCtyReg_dt$cty)
+impCtyReg_dt <- impCtyReg_dt[!duplicated(impCtyReg_dt$cty), ] 
+
+# remove unneeded columns
+impCtyReg_dt <- impCtyReg_dt[, c("wbCountry", 
+                                 "impCountryAbb",
+                                 "dupImpCty") := NULL]
+
+
+# region long names
+impCtyReg_dt[reg == "EAP", region := "East Asia & Pacific"]
+impCtyReg_dt[reg == "EUR", region := "Europe"]
+impCtyReg_dt[reg == "FSU", region := "Former Soviet Union"]
+impCtyReg_dt[reg == "LAC", region := "Latin America & Caribbean"]
+impCtyReg_dt[reg == "MEN", region := "Middle East & North Africa"]
+impCtyReg_dt[reg == "NAM", region := "North America"]
+impCtyReg_dt[reg == "SAS", region := "South Asia"]
+impCtyReg_dt[reg == "SSA", region := "Sub-Saharan Africa"]
+
+# save list of IMPACT cty with their 
+# fao and impact regions associations and WB income class
+#saveRDS(impCtyReg_dt, file = "procData_impCtyReg_dt.Rda")
+
+# FAO MAPPING====
+
+# For each cty in FAOSTAT build a data.table that contains 
+# 1) fao cty (3 letter cty code) 2) Standard-IMPACT regions, 3) a fao region,
+# 4) full cty name, 5) impact cty, 6) WB cty class
+
+
+# start with impactISO
+faoCtyReg_dt <- copy(impactISO_dt)
+
+
+# fill the NA with previous rows value, so each isoCty 
+# has the associated impact code
+# use "zoo" package
+faoCtyReg_dt <- na.locf(impactISO_dt)
+
+# add FAO region, IMPACT region, wb income class, to isocty
+faoCtyReg_dt <- merge(faoCtyReg_dt, impCtyReg_dt,
+                      by = c("cty", "impCountry"))
+
+
+
+# add fao country name so can later merge with fao fbs data
+faoCtyRegFBS_dt <- data.table(read_xlsx(path = "rawData_ctyRegMapping.xlsx",
+                                     sheet = "faoCtyReg"))
+
+# keep columns
+faoCtyRegFBS_dt <- faoCtyRegFBS_dt[, c("Country", "ISO3 Code")]
+
+# rename columns
+colnames(faoCtyRegFBS_dt) <- c("faoCountry", "isoCty")
+
+# remove duplicates
+faoCtyRegFBS_dt <- unique(faoCtyRegFBS_dt[, c("faoCountry", "isoCty")])
+
+
+# merge 
+faoCtyReg_dt <- merge(faoCtyReg_dt, faoCtyRegFBS_dt,
+                      by = "isoCty")
+
+# save cty from faostat with their 
+# impact regions, impact cty, associations and WB income class
+#saveRDS(faoCtyReg_dt, file = "procData_faoCtyReg_dt.Rda")
+
+
+```
+
+
+
+```{r generating figures for LDF, include=FALSE}
+# Description: read in FAO Food Balance Sheets (FBS), population, and GDP
+# to generate figures and tables for
+# livestock-derived foods (LDF) trends, including association with human population and GDP
+# http://www.fao.org/faostat/en/#faq writes
+# "FBS measures a food availability instead of real consumption." (accessed October 1st 2019)
+# the word "demand" is used to be internally consistent in the current study,
+# although "demand" is "food availability" and not real consumption
+# cty = country, reg = region
+# only read in country data
+# then add IMPACT region labels to do region aggregations
+# ldf = livestock-derived food
+
+
+# COUNTRY/REG NAMES=============================================================
+
+faoCtyReg_dt <- readRDS(file = "procData_faoCtyReg_dt.Rda")
+
+# READ GENUS PROTEIN CONTENT====================================================
+# grams of protein per 100 g food for each ldf in a cty and reg
+
+# cty
+genusCtyProt_dt <- fread("rawData_genusCty_dt.csv")
+genusCtyProt_dt$kcalPerKgGenus <- NULL
+
+# reg
+genusRegProt_dt <- fread("rawData_genusReg_dt.csv")
+genusRegProt_dt$kcalPerKgGenus <- NULL
+
+
+# READ DATA FOR LDF & POP CTY===================================================
+# data downloaded as csv files from http://www.fao.org/faostat/en/#data Food Balance on Feb. 6, 2020
+# use direct download of needed data using ISO3 codes for each country
+# cty ldf demand and pop with ISO3
+# ldf supply per person (kg and protein)
+# and population for all cty
+
+# 1961 to 2013
+ldfPopCtyHist19612013_dt <- fread("rawData_FAOSTAT_data_2-6-2020 (1).csv")
+
+# 2014 to 2017
+
+# downloaded from FAOSAT on Feb. 2, 2020
+ldfPopCtyHist20142017_old_dt <- fread("rawData_FAOSTAT_data_2-6-2020.csv")
+
+# downloaded from FAOSTAT on Jun, 29. 2020
+ldfPopCtyHist20142017_dt <- fread("rawData_FAOSTAT_data_6-29-2020.csv")
+ldfPopCtyHist20142017_dt$Note <- NULL
+
+
+# adjust China naming:
+# ldfPopCtyHist20142017_dt CHN is all china and CPR is China, mainland
+# ldfPopCtyHist19612013_dt CPR is all china and CHN is China, mainland
+# must be consistent in both and CHN is mainland China and CPR is all China
+# all China here means mainland China + Hong Kong SAR + Macao SAR + Taiwan 
+ldfPopCtyHist20142017_dt[Area == "China, mainland", `Area Code` := "CHN"]
+ldfPopCtyHist20142017_dt[Area == "China", `Area Code` := "CPR"]
+
+# adjust GBR naming:
+# ldfPopCtyHist20142017_dt GBR is United Kingdom of Great Britain and Northern Ireland
+# ldfPopCtyHist19612013_dt GBR is United Kingdom
+# must be consistent in both and should be United Kingdom of Great Britain and Northern Ireland
+ldfPopCtyHist19612013_dt[Area == "United Kingdom", Area := "United Kingdom of Great Britain and Northern Ireland"]
+
+
+# "rawData_FAOSTAT_data_6-29-2020.csv" doesn't include population data for LAO or UZB
+# for 2014 to 2017
+# but the older version rawData_FAOSTAT_data_2-6-2020 does.
+
+# so append these data
+laoUzbPop_dt <- ldfPopCtyHist20142017_old_dt[Item == "Population" &
+  (`Area Code`== "LAO" | `Area Code`== "UZB")]
+
+# stack laoUzbPop_dt ontop of ldfPopCtyHist20142017_dt so all data in one file 
+ldfPopCtyHist20142017_dt <- rbind(ldfPopCtyHist20142017_dt, laoUzbPop_dt)
+
+# bind ldf and pop data
+ldfPopCtyHist_dt <- rbind(ldfPopCtyHist19612013_dt,
+                          ldfPopCtyHist20142017_dt)
+
+# change "Item" names for the ldf and human population
+# 6 ldf: 
+# IMPACT has six ldf commodities: here are the commodity names
+# with the IMPACT commodity code in parentheses after the commodity name:
+# 1) beef cattle meat (cbeef),
+# 2) eggs (ceggs), 
+# 3) sheep and goat meat (clamb)
+# 4) milk from dairy cattle (cmilk), 
+# 5) pig meat (cpork), 
+# 6) poultry meat (cpoul).
+
+# match these 6 IMPACT ldf to the FAO Items as follows:
+
+# cbeef (in IMPACT) is Bovine Meat (in FAOSTAT FBS Item list)
+# ceggs is Eggs
+# clamb is Mutton & Goat Meat
+# cmilk is Milk - Excluding Butter
+# cpork is Pigmeat
+
+# rename "Item" so match IMPACT names
+ldfPopCtyHist_dt[Item == "Bovine Meat", Item := "Beef"]
+ldfPopCtyHist_dt[Item == "Mutton & Goat Meat", Item := "Sheep"]
+ldfPopCtyHist_dt[Item == "Pigmeat", Item := "Pork"]
+ldfPopCtyHist_dt[Item == "Milk - Excluding Butter", Item := "Milk"]
+ldfPopCtyHist_dt[Item == "Poultry Meat", Item := "Poultry"]
+
+# rename Elements
+ldfPopCtyHist_dt[Element == "Food supply quantity (kg/capita/yr)", Element := "kgPersYr"]
+ldfPopCtyHist_dt[Element == "Protein supply quantity (g/capita/day)", Element := "protGPersDay"]
+ldfPopCtyHist_dt[Element == "Total Population - Both sexes", Element := "pop000Peop"]
+
+# keep relevant columns
+ldfPopCtyHist_dt <- ldfPopCtyHist_dt[, c("Area Code",
+                                         "Area",
+                                         "Element",
+                                         "Item",
+                                         "Year",
+                                         "Value")]
+
+
+# "protGPersDay" into kg per year so in same units as food
+ldfPopCtyHist_dt[Element == "protGPersDay", Value := (Value * 365) / 1000]
+
+# rename Elements
+ldfPopCtyHist_dt[Element == "kgPersYr", Element := "kgFoodPersYr"]
+ldfPopCtyHist_dt[Element == "protGPersDay", Element := "kgProtPersYr"]
+
+
+# rename columns
+colnames(ldfPopCtyHist_dt) <- c("isoCty",
+                                "faoCountry",
+                                "element",
+                                "item",
+                                "year",
+                                "value")
+
+# year as character
+ldfPopCtyHist_dt$year <- as.character(ldfPopCtyHist_dt$year)
+
+
+# remove CPR as China is listed as an aggregate "CPR"
+# and as individual iso3 units (CHN, HKG, MAC, TWN)
+# keep the 4 individual units
+ldfPopCtyHist_dt <- ldfPopCtyHist_dt[isoCty != "CPR", ]
+
+# PER PERSON LDF-CTY============================================================
+# data for per person ldf demand by cty
+
+# drop population
+ldfCtyPpsHist_dt <- ldfPopCtyHist_dt[item != "Population", ]
+
+
+# rename columns
+names(ldfCtyPpsHist_dt)[names(ldfCtyPpsHist_dt) == "item"] <- "ldf"
+names(ldfCtyPpsHist_dt)[names(ldfCtyPpsHist_dt) == "element"] <- "ldfUnit"
+
+# ldf unit named as food or protein 
+ldfCtyPpsHist_dt[ldfUnit == "kgFoodPersYr", ldfUnit := "food"]
+ldfCtyPpsHist_dt[ldfUnit == "kgProtPersYr", ldfUnit := "protein"]
+
+# rename "value" to demand 
+names(ldfCtyPpsHist_dt)[names(ldfCtyPpsHist_dt) == "value"] <- "demaPerPersKg"
+
+# long to wide
+# so can add protein from GENUS
+
+ldfCtyPpsHist_dt <- dcast(ldfCtyPpsHist_dt,
+                          isoCty + faoCountry + ldf + year ~
+                            ldfUnit,
+                          value.var = "demaPerPersKg")
+
+# merge data so all cty/reg names together
+ldfCtyPpsHist_dt <- merge(ldfCtyPpsHist_dt, faoCtyReg_dt,
+                       by = c("isoCty", "faoCountry"),
+                       all.x = TRUE)
+
+# fill in missing data
+# classify by hand the faoCountry that have missing region and WB class
+ldfCtyPpsHist_dt[faoCountry == "Belgium-Luxembourg", wbCtyIncClass := "High income"]
+ldfCtyPpsHist_dt[faoCountry == "Belgium-Luxembourg", reg := "EUR"]
+
+
+ldfCtyPpsHist_dt[faoCountry == "Czechoslovakia", wbCtyIncClass := "High income"]
+ldfCtyPpsHist_dt[faoCountry == "Czechoslovakia", reg := "EUR"]
+
+ldfCtyPpsHist_dt[faoCountry == "USSR", wbCtyIncClass := "Upper middle income"]
+ldfCtyPpsHist_dt[faoCountry == "USSR", reg := "FSU"]
+
+ldfCtyPpsHist_dt[faoCountry == "Yugoslav SFR" |
+                faoCountry ==  "Serbia and Montenegro",
+              wbCtyIncClass := "Upper middle income"]
+
+ldfCtyPpsHist_dt[faoCountry == "Yugoslav SFR" |
+                faoCountry ==  "Serbia and Montenegro",
+              reg := "EUR"]
+
+ldfCtyPpsHist_dt[faoCountry == "Ethiopia PDR" |
+                faoCountry == "Sudan (former)" |
+                isoCty =="CIV",
+              wbCtyIncClass := "Low income"]
+
+ldfCtyPpsHist_dt[faoCountry == "Ethiopia PDR" |
+                faoCountry == "Sudan (former)" |
+                isoCty =="CIV",
+              reg := "SSA"]
+
+ldfCtyPpsHist_dt[faoCountry == "United Kingdom of Great Britain and Northern Ireland",
+              reg := "EUR"]
+
+ldfCtyPpsHist_dt[faoCountry == "United Kingdom of Great Britain and Northern Ireland",
+              wbCtyIncClass := "High income"]
+
+# NA values include TUN pork for protein (53 yr, 1961 to 2013) and 
+# PAK pork for food (1 yr)
+# these should be a zero
+
+ldfCtyPpsHist_dt$food[is.na(ldfCtyPpsHist_dt$food)] <- 0
+ldfCtyPpsHist_dt$protein[is.na(ldfCtyPpsHist_dt$protein)] <- 0
+
+# add genus protein content of each ldf using cty
+ldfCtyPpsHist_dt <- merge(ldfCtyPpsHist_dt,
+                          genusCtyProt_dt,
+                          by = c("ldf", "cty"),
+                          all.x = TRUE)
+
+# add genus protein content of each ldf using reg
+ldfCtyPpsHist_dt <- merge(ldfCtyPpsHist_dt,
+                          genusRegProt_dt,
+                          by = c("ldf", "reg"),
+                          all.x = TRUE)
+
+ldfCtyPpsHist_dt[, percProtGenus := percProtCtyGenus]
+ldfCtyPpsHist_dt[is.na(percProtGenus), percProtGenus := percProtRegGenus]
+
+# per person demand for protein using GENUS data
+ldfCtyPpsHist_dt[, proteinGenus := food * (percProtGenus / 100)]
+
+# protein percent in food using FBS
+ldfCtyPpsHist_dt[, percProt := 100 * protein / food]
+
+# nan and infinite as NA so excluded from average protein]
+ldfCtyPpsHist_dt$percProt[is.nan(ldfCtyPpsHist_dt$percProt)] = NA
+ldfCtyPpsHist_dt$percProt[is.infinite(ldfCtyPpsHist_dt$percProt)] = NA
+
+# * prot content ldf-cty====
+# using FBS and GENuS
+ldfProtPerc_dt <- ldfCtyPpsHist_dt[, c("year", "ldf", 
+                                    "reg",
+                                    "faoCountry", "isoCty",
+                                    "cty",
+                                    "percProt",
+                                    "percProtGenus"
+                                    )]
+
+# average % protein in ldf-cty 
+ldfProtPercCty_dt <- 
+  ldfProtPerc_dt[, .(percProtCty =  mean(percProt),
+                         percProtGenusCty =  mean(percProtGenus)),
+                     by = .(ldf, cty, reg)]
+
+saveRDS(ldfProtPercCty_dt, file = "procData_ldfProtPercCty_dt.Rda")
+
+# * prot content ldf-reg====
+# average % protein in ldf-reg using FBS and GENuS
+ldfProtPercReg_dt <- 
+  ldfProtPerc_dt[, .(percProtReg =  mean(percProt, na.rm = TRUE),
+                     percProtGenusReg =  mean(percProtGenus)),
+                 by = .(ldf, reg)]
+
+saveRDS(ldfProtPercReg_dt, file = "procData_ldfProtPercReg_dt.Rda")
+
+
+# wide to long
+ldfCtyPpsHist_dt <- ldfCtyPpsHist_dt[, c("ldf",
+                                         "faoCountry", "isoCty",
+                                        "year", "food",
+                                        "protein", "proteinGenus") ]
+
+# wide to long so demand (food, protein, protein GENuS) in one column
+ldfCtyPpsHist_dt <- melt(
+  ldfCtyPpsHist_dt,
+  id.vars = c("faoCountry",
+              "isoCty",
+              "year",
+              "ldf"),
+  variable.name = "ldfUnit",
+  variable.factor = FALSE,
+  value.name = "demaPerPersKg")
+
+# POP CTY=======================================================================
+# human population for each country
+
+# keep population "item"
+popCtyHist_dt <- ldfPopCtyHist_dt[item == "Population"]
+
+# remove unneeded columns
+popCtyHist_dt <- popCtyHist_dt[, c("item", "element") := NULL]
+
+# rename  "value' as population
+names(popCtyHist_dt)[names(popCtyHist_dt) == "value"] <- "pop000Peop"
+
+
+# now map isoCty/faoCountry to regions & WB class
+
+# load mapping data
+faoCtyReg_dt <- readRDS(file = "procData_faoCtyReg_dt.Rda")
+
+# merge data
+popCtyHist_dt <- merge(popCtyHist_dt, faoCtyReg_dt,
+                       by = c("isoCty", "faoCountry"),
+                       all.x = TRUE)
+
+# fill in missing data
+# classify by hand the faoCountry that have missing region and WB class
+
+popCtyHist_dt[faoCountry == "Belgium-Luxembourg", wbCtyIncClass := "High income"]
+popCtyHist_dt[faoCountry == "Belgium-Luxembourg", reg := "EUR"]
+popCtyHist_dt[faoCountry == "Belgium-Luxembourg", region := "Europe"]
+
+
+popCtyHist_dt[faoCountry == "Czechoslovakia", wbCtyIncClass := "High income"]
+popCtyHist_dt[faoCountry == "Czechoslovakia", reg := "EUR"]
+popCtyHist_dt[faoCountry == "Czechoslovakia", region := "Europe"]
+
+popCtyHist_dt[faoCountry == "USSR", wbCtyIncClass := "Upper middle income"]
+popCtyHist_dt[faoCountry == "USSR", reg := "FSU"]
+popCtyHist_dt[faoCountry == "USSR", region := "Former Soviet Union"]
+
+popCtyHist_dt[faoCountry == "Yugoslav SFR" |
+                faoCountry ==  "Serbia and Montenegro",
+              wbCtyIncClass := "Upper middle income"]
+
+popCtyHist_dt[faoCountry == "Yugoslav SFR" |
+                faoCountry ==  "Serbia and Montenegro",
+              reg := "EUR"]
+
+popCtyHist_dt[faoCountry == "Yugoslav SFR" |
+                faoCountry ==  "Serbia and Montenegro",
+              region := "Europe"]
+
+popCtyHist_dt[faoCountry == "Ethiopia PDR" |
+                faoCountry == "Sudan (former)" |
+                isoCty =="CIV",
+              wbCtyIncClass := "Low income"]
+
+popCtyHist_dt[faoCountry == "Ethiopia PDR" |
+                faoCountry == "Sudan (former)" |
+                isoCty =="CIV",
+              reg := "SSA"]
+
+popCtyHist_dt[faoCountry == "Ethiopia PDR" |
+                faoCountry == "Sudan (former)" |
+                isoCty =="CIV",
+              region := "Sub-Saharan Africa"]
+
+popCtyHist_dt[faoCountry == "United Kingdom of Great Britain and Northern Ireland",
+              wbCtyIncClass := "High income"]
+
+popCtyHist_dt[faoCountry == "United Kingdom of Great Britain and Northern Ireland",
+              reg := "EUR"]
+
+popCtyHist_dt[faoCountry == "United Kingdom of Great Britain and Northern Ireland",
+              region := "Europe"]
+
+
+# remove columns
+popCtyHist_dt <- popCtyHist_dt[, c("cty",
+                                   "impCountry",
+                                   "isoCountry") := NULL]
+
+# save data
+saveRDS(popCtyHist_dt, file = "procData_popCtyHist_dt.Rda")
+
+# POP REG=======================================================================
+
+# total population in each region
+popRegHist_dt <- popCtyHist_dt[, .(
+  pop000Peop =  sum(pop000Peop)),
+  by = .(year, reg)]
+
+saveRDS(popRegHist_dt, file = "procData_popRegHist_dt.Rda")
+
+sum(popCtyHist_dt$pop000Peop)==sum(popRegHist_dt$pop000Peop)
+
+# POP WLD=======================================================================
+# total population of world
+popWldHist_dt <- popCtyHist_dt[, .(
+  pop000Peop =  sum(pop000Peop)),
+  by = .(year)]
+
+# check wld pop is the same as summing reg totals
+popWldByRegHist_dt <- popRegHist_dt[, .(
+  pop000Peop =  sum(pop000Peop)),
+  by = .(year)]
+
+sum(popWldByRegHist_dt$pop000Peop)==sum(popWldHist_dt$pop000Peop)
+  
+saveRDS(popWldHist_dt, file = "procData_popWldHist_dt.Rda")
+
+
+# PER PERSON AND TOTAL LDF-CTY==================================================
+
+# data for total demand by cty by
+# merging population and per person demand
+ldfCtyHist_dt <- merge(ldfCtyPpsHist_dt, popCtyHist_dt,
+                          by = c("isoCty", "faoCountry", "year"),
+                          all.x = TRUE)
+
+# total demand is per person demand times number of people
+ldfCtyHist_dt[, demaTot000Tons := (demaPerPersKg * (pop000Peop * 1000))/ 
+                   (1000 * 1000)] # convert from kg to 000 tons
+
+# remove pop column
+ldfCtyHist_dt$pop000Peop <- NULL
+
+# save cty demand
+saveRDS(ldfCtyHist_dt, file = "procData_ldfCtyHist_dt.Rda")
+
+# PER PERSON AND TOTAL LDF-REG==================================================
+
+# remove per person cty demand 
+ldfRegTotHist_dt <- ldfCtyHist_dt[, "demaPerPersKg" := NULL]
+
+# * region total demand for each ldf====
+ldfRegTotHist_dt <- ldfRegTotHist_dt[, .(
+  demaTot000Tons =  sum(demaTot000Tons)),
+  by = .(year, ldfUnit, ldf, reg)]
+
+# merge reg total for each ldf with population
+ldfPopRegTotHist_dt <- merge(ldfRegTotHist_dt, popRegHist_dt,
+                           by = c ("year", "reg"))
+
+# * global total demand for each ldf====
+
+# total world demand summed across all reg
+ldfWldTotHist_dt <- ldfRegTotHist_dt[, .(
+  reg = "WLD",
+  demaTot000Tons =  sum(demaTot000Tons)),
+  by = .(year, ldfUnit, ldf)]
+
+
+# add world total to reg total
+# first merge world total demand with world population
+ldfPopWldTotHist_dt <- merge(ldfWldTotHist_dt, 
+                          popWldHist_dt,
+                          by = "year")
+
+# second bind globe and reg total demand and population
+ldfRegTotHist_dt <- rbind(ldfPopRegTotHist_dt,
+                          ldfPopWldTotHist_dt)
+
+
+# create a copy as now adding per person demand too
+ldfRegHist_dt <- copy(ldfRegTotHist_dt)
+
+# * per person demand====
+ldfRegHist_dt[, demaPerPersKg := (demaTot000Tons * 1000 * 1000)/ 
+                (pop000Peop * 1000)] 
+
+# remove pop column
+ldfRegHist_dt$pop000Peop <- NULL
+
+# label if reg or wld
+ldfRegHist_dt[reg ==  "WLD", regType := "wld"]
+ldfRegHist_dt[reg != "WLD", regType := "reg"]
+
+saveRDS(ldfRegHist_dt, file = "procData_ldfRegHist_dt.Rda")
+
+```
+
+
+
+```{r IMPACT simulations, include=FALSE}
+# Description: IMPACT simulations using excel interface for scenarios:
+# 3 SSPs (SSP1, SSP2, SSP3) for income and population (not full SSP narrative)
+# including per person ldf demand projected
+# and aggregate cty to region for all data ldf total and population
+
+# income elasticities: 1 default, 4 red meat lower
+# 4 lower red meat income elasticities run with each SSP income & population
+# 50% lower all cty
+# 50% lower HIC (high-income cty)
+# 100% lower all cty
+# 100% lower HIC (high-income cty)
+
+# unless otherwise stated,all scenarios run using HADGEM GCM 
+# for RCP 6.0 and
+# co2 fertilization of 379 ppm
+
+
+# IMPACT v3 calibrated to SSP2 gdp and population
+# no change in IPRs or elasticities between SSPs
+
+
+# ORGANIZE ALL LDF DEMAND RESULTS===============================================
+
+# load data 
+ldfCtyTotProj_dt <- fread("rawData_ldfCtyTotProj_dt.csv")
+
+
+# add "scen" as scenario id
+ldfCtyTotProj_dt$scen <- {stringr::str_sub(ldfCtyTotProj_dt$.id,
+                                           start = 5, 
+                                           end = -4)}
+# drop .id
+ldfCtyTotProj_dt$.id<- NULL
+
+
+# year as character
+ldfCtyTotProj_dt$YRS <- as.character(ldfCtyTotProj_dt$YRS)
+
+# cbeef (in IMPACT) is Bovine Meat (in FAOSTAT FBS Item list)
+# ceggs is Eggs
+# clamb is Mutton & Goat Meat
+# cmilk is Milk - Excluding Butter
+# cpork is Pigmeat
+# cpoult is Poultry Meat
+
+# create ldf column
+ldfCtyTotProj_dt[C == "cbeef", ldf := "Beef"]
+ldfCtyTotProj_dt[C == "ceggs", ldf := "Eggs"]
+ldfCtyTotProj_dt[C == "clamb", ldf := "Sheep"]
+ldfCtyTotProj_dt[C == "cmilk", ldf := "Milk"]
+ldfCtyTotProj_dt[C == "cpork", ldf := "Pork"]
+ldfCtyTotProj_dt[C == "cpoul", ldf := "Poultry"]
+
+# convert C into a character so can merge with protein
+ldfCtyTotProj_dt$C <- as.character(ldfCtyTotProj_dt$C)
+
+# column names
+colnames(ldfCtyTotProj_dt) <- c("commodity",
+                                "cty",
+                                "year",
+                                "foodDemaTot000Tons",
+                                "scen",
+                                "ldf")
+
+
+# * assign region and country full name to cty====
+impCtyReg_dt <- readRDS(file = "procData_impCtyReg_dt.Rda")
+
+
+# harmonize cty name so can merge 
+names(impCtyReg_dt)[names(impCtyReg_dt) == "impCty"] <- "cty"
+
+# merge total cty demand for each ldf with reg/cty list
+ldfCtyTotProj_dt <- merge(ldfCtyTotProj_dt, impCtyReg_dt, 
+                     by = "cty", 
+                     allow.cartesian = TRUE)
+
+# * protein content====
+# load ldf protein by cty/reg from FAO FBS + GENuS
+ldfProtPercReg_dt <- readRDS(file = "procData_ldfProtPercReg_dt.Rda")
+ldfProtPercCty_dt <- readRDS(file = "procData_ldfProtPercCty_dt.Rda")
+
+# merge cty protein content of each ldf with cty total demand for each ldf
+ldfCtyTotProj_dt <- merge(ldfCtyTotProj_dt, ldfProtPercCty_dt, 
+                     by = c("ldf", "cty", "reg"), 
+                     all.x = TRUE,
+                     allow.cartesian = TRUE)
+
+# merge reg protein content of each ldf with cty total demand for each ldf
+ldfCtyTotProj_dt <- merge(ldfCtyTotProj_dt, ldfProtPercReg_dt, 
+                       by = c("ldf", "reg"), 
+                       all.x = TRUE,
+                       allow.cartesian = TRUE)
+
+# replace NA in "percProtCty" with "percProtReg"
+# if cty level protein % missing give the region average,
+
+# protein content of each LDF (g protein per 100 g food, so a %)
+
+# using FBS
+ldfCtyTotProj_dt[, percProt := percProtCty]
+ldfCtyTotProj_dt[is.na(percProt), percProt := percProtReg]
+
+# using GENuS
+ldfCtyTotProj_dt[, percProtGenus := percProtGenusCty]
+ldfCtyTotProj_dt[is.na(percProtGenus), percProtGenus := percProtGenusReg]
+
+# calculate protein demand for each ldf in each cty
+
+# using FBS ratio
+ldfCtyTotProj_dt[, protDemaTot000Tons := foodDemaTot000Tons * percProt / 100]
+
+# using GENuS
+ldfCtyTotProj_dt[, protDemaGenusTot000Tons := foodDemaTot000Tons * percProtGenus / 100]
+
+# remove unneeded columns
+ldfCtyTotProj_dt[, c("percProt",
+                     "percProtCty", 
+                     "percProtReg",
+                     "percProtGenus",
+                     "percProtGenusCty", 
+                     "percProtGenusReg",
+                     "commodity") := NULL]
+
+# wide to long so demand (food, protein, protein GENuS) in one column
+ldfCtyTotProj_dt <- melt(
+                      ldfCtyTotProj_dt, 
+                      id.vars = c("reg",
+                                  "region",
+                                  "impCountry",
+                                  "cty",
+                                  "wbCtyIncClass",
+                                  "year",
+                                  "ldf",
+                                  "scen"),
+                      variable.name = "ldfUnit",
+                      variable.factor = FALSE,
+                      value.name = "demaTot000Tons")
+
+
+# change ldfUnit names
+ldfCtyTotProj_dt[ldfUnit == "foodDemaTot000Tons", ldfUnit := "food"]
+ldfCtyTotProj_dt[ldfUnit == "protDemaTot000Tons", ldfUnit := "protein"]
+ldfCtyTotProj_dt[ldfUnit == "protDemaGenusTot000Tons", ldfUnit := "proteinGenus"]
+
+# save total demand in each cty for each ldf====
+saveRDS(ldfCtyTotProj_dt, file = "procData_ldfCtyTotProj_dt.Rda")
+
+
+# PER PERSON DEMAND=============================================================
+
+# total cty demand for each ldf for all scenarios
+if(!exists("ldfCtyTotProj_dt")) {
+  ldfCtyTotProj_dt <-
+    readRDS(file = "procData_ldfCtyTotProj_dt.Rda")
+}
+# country pop for all scenarios
+popCtyProj_dt <- fread("rawData_popCtyProj_dt.csv")
+popCtyProj_dt$year <- as.character(popCtyProj_dt$year)
+
+
+# merge ldf and pop so can compute per person ldf demand
+ldfCtyProj_dt <- merge(
+  ldfCtyTotProj_dt,
+  popCtyProj_dt,
+  by = c("cty",
+         "impCountry",
+         "reg",
+         "region",
+         "wbCtyIncClass",
+         "year",
+         "scen")
+)
+
+# per person demand in kg
+ldfCtyProj_dt[, demaPerPersKg := (demaTot000Tons * 1000 * 1000) / (pop000Peop *
+                                                                     1000)]
+
+# remove population and drop pop and tot from data.table
+ldfCtyProj_dt$pop000Peop <- NULL
+
+# save demand for ldf at country scale, total and per person
+saveRDS(ldfCtyProj_dt, 
+        file = "procData_ldfCtyProj_dt.Rda")
+
+
+# REGION DEMAND=================================================================
+# total demand and per person per cty for each ldf
+
+if(!exists("ldfCtyProj_dt")) {
+  ldfCtyProj_dt <-
+    readRDS(file = "procData_ldfCtyProj_dt.Rda")
+}
+
+# total population per cty
+popCtyProj_dt <- fread("rawData_popCtyProj_dt.csv")
+popCtyProj_dt$year <- as.character(popCtyProj_dt$year)
+
+# REG TOTAL DEMAND FOR EACH LDF=================================================
+
+# * reg total demand for each ldf====
+
+# sum all cty demand by year, scen, ldf, and ldf unit
+ldfRegTotProj_dt <- ldfCtyProj_dt[, .(demaTot000Tons = 
+                                        sum(demaTot000Tons)),
+                                  by = .(reg,
+                                         region,
+                                         year,
+                                         scen,
+                                         ldf, 
+                                         ldfUnit)]
+
+# not an even number because not all cty report demand for all ldf in
+# every year
+
+# count number obs per cty
+ldfCtyProjNObs_dt <- ldfCtyProj_dt[, .N,
+                                   by = .(cty,
+                                          reg,
+                                          region
+                                   )]
+# not all cty have each ldf in each year
+
+
+# * world total demand for each ldf====
+# sum cty demand for each ldf
+ldfWldTotByCtyProj_dt <- ldfCtyProj_dt[, .(demaTot000Tons = 
+                                             sum(demaTot000Tons),
+                                           reg = "WLD",
+                                           region = "World"),
+                                       by = .(year,
+                                              scen,
+                                              ldf, 
+                                              ldfUnit)]
+
+# sum reg demand for each ldf
+ldfWldTotByRegProj_dt <- ldfRegTotProj_dt[, .(demaTot000Tons = 
+                                                sum(demaTot000Tons),
+                                              reg = "WLD",
+                                              region = "World"),
+                                          by = .(year,
+                                                 scen,
+                                                 ldf, 
+                                                 ldfUnit)]
+
+# check sums
+sum(ldfWldTotByRegProj_dt$demaTot000Tons) == sum(ldfWldTotByCtyProj_dt$demaTot000Tons)
+
+# bind world total to region total
+ldfRegTotProj_dt <- rbind(ldfRegTotProj_dt, 
+                          ldfWldTotByCtyProj_dt)
+
+# check row numbers
+# for each region, ldf, ldfUnit, and scenario there should be 46 observations
+# one for each year
+nRow_ldfRegProj_dt <- ldfRegTotProj_dt[, .N,
+                                       by = list(reg, ldf, ldfUnit, scen)]
+
+min(nRow_ldfRegProj_dt$N) == max(nRow_ldfRegProj_dt$N)
+
+# POPULATION====================================================================
+
+# total population of each region
+# sum across all cty in a reg
+# * reg sum====
+popRegProj_dt <- popCtyProj_dt[, .(pop000Peop =  sum(pop000Peop)),
+                               by = .(reg, region, year, scen)]
+
+# * pop world sum====
+# sum population across all cty in world
+popWldByCty_dt <- popCtyProj_dt[, .(pop000Peop =  sum(pop000Peop),
+                                    reg = "WLD",
+                                    region = "World"),
+                                by = .(year, scen)]
+
+
+# check if world pop is same if sum cty vs. sum reg
+# take sum of pop across by reg
+popWldByReg_dt <- popRegProj_dt[, .(pop000Peop =  sum(pop000Peop)),
+                                by = .(year, scen)]
+
+# check sums
+sum(popWldByReg_dt$pop000Peop) == sum(popWldByCty_dt$pop000Peop)
+
+# bind world total to region totals
+popRegProj_dt <- rbind(popRegProj_dt, popWldByCty_dt)
+
+# save projected pop for regions
+saveRDS(popRegProj_dt, file = "procData_popRegProj_dt.Rda")
+
+
+# MERGE DEMAND AND POP REG======================================================
+# merge region total demand for each ldf with reg pop 
+# so can compute per person demand for each ldf in each region
+ldfRegProj_dt <- merge(ldfRegTotProj_dt,
+                       popRegProj_dt,
+                       by = c("reg",
+                              "region",
+                              "year",
+                              "scen"))
+
+# per person demand in kg
+# change demand from thousands of tons to kg by multipling by one million
+# change from thousand of people to people by multipling by 1000
+ldfRegProj_dt[, demaPerPersKg := (demaTot000Tons * 1000 * 1000) /
+                (pop000Peop * 1000)]
+
+# remove unneeded columns
+ldfRegProj_dt$pop000Peop <- NULL
+
+# label if reg or wld
+ldfRegProj_dt[reg ==  "WLD", regType := "wld"]
+ldfRegProj_dt[reg != "WLD", regType := "reg"]
+
+
+# save demand for each ldf total and per person at region scale
+saveRDS(ldfRegProj_dt, file = "procData_ldfRegProj_dt.Rda")
+
+```
+
+
+
+```{r data merge, include=FALSE}
+# Description: merge historical and projected ldf demand
+# by region and by country
+
+
+# REGION========================================================================
+
+# * hist ldf demand====
+ldfRegHist_dt <-
+  readRDS(file = "procData_ldfRegHist_dt.Rda")
+
+# add columns so know data is historical data
+# from FAO Food Balance Sheets
+ldfRegHist_dt$dataType <- "Historical"
+ldfRegHist_dt$scen <- "hist"
+
+head(ldfRegHist_dt)
+
+# add reg
+impCtyReg_dt <- readRDS(file = "procData_impCtyReg_dt.Rda")
+regRegion_dt <- unique(impCtyReg_dt[, c("reg", "region")])
+
+# merge
+ldfRegHist_dt <- merge(ldfRegHist_dt, regRegion_dt,
+                       by = "reg",
+                       all.x = TRUE)
+
+ldfRegHist_dt[reg == "WLD", region := "World"]
+
+# * proj ldf demand====
+ldfRegProj_dt <-
+  readRDS(file = "procData_ldfRegProj_dt.Rda")
+
+# add column so know it is projected data taken from IMPACT
+ldfRegProj_dt$dataType <- "Projected"
+
+# * merge hist & proj====
+ldfRegAll_dt <-
+  rbind(ldfRegProj_dt, ldfRegHist_dt)
+
+# column order
+ldfRegAll_dt <- setcolorder(
+  ldfRegAll_dt,
+  c(
+    "reg",
+    "regType",
+    "dataType",
+    "year",
+    "ldfUnit",
+    "ldf",
+    "scen",
+    "demaTot000Tons",
+    "demaPerPersKg"
+  )
+)
+
+# * save====
+saveRDS(ldfRegAll_dt, file = "procData_ldfRegAll_dt.Rda")
+
+# COUNTRY=======================================================================
+# * hist ldf demand====
+ldfCtyHist_dt <-
+  readRDS(file = "procData_ldfCtyHist_dt.Rda")
+
+# add column so know it is historical data
+# from FAO Food Balance Sheets
+ldfCtyHist_dt$dataType <- "Historical"
+ldfCtyHist_dt$scen <- "hist"
+
+# * proj ldf demand and pop====
+ldfCtyProj_dt <-
+  readRDS(file = "procData_ldfCtyProj_dt.Rda")
+
+# add column so know it is projected data, taken from IMPACT
+ldfCtyProj_dt$dataType <- "Projected"
+
+
+# in ldfCtyRefProj_dt rename "impCountry" as "country" just for the merge
+names(ldfCtyProj_dt)[names(ldfCtyProj_dt) == "impCountry"] <- "country"
+
+# in ldfCtyHist_dt rename "isoCty" as "cty" and "faoCountry" as "country"
+names(ldfCtyHist_dt)[names(ldfCtyHist_dt) == "isoCty"] <- "cty"
+names(ldfCtyHist_dt)[names(ldfCtyHist_dt) == "faoCountry"] <- "country"
+
+
+# * bind hist & proj====
+colnames(ldfCtyProj_dt)
+colnames(ldfCtyHist_dt)
+ldfCtyAll_dt <- rbind(ldfCtyProj_dt, ldfCtyHist_dt)
+
+
+# in ldfCtyRefProj_dt rename "impCountry" as "country"
+names(ldfCtyProj_dt)[names(ldfCtyProj_dt) == "country"] <- "impCountry"
+
+# label if reg or wld
+ldfCtyAll_dt[reg ==  "WLD", regType := "wld"]
+ldfCtyAll_dt[reg != "WLD", regType := "reg"]
+
+# set column order
+ldfCtyAll_dt <- setcolorder(
+  ldfCtyAll_dt,
+  c("cty",
+    "country",
+    "wbCtyIncClass",
+    "reg",
+    "regType",
+    "dataType",
+    "year",
+    "ldfUnit",
+    "ldf",
+    "scen",
+    "demaTot000Tons",
+    "demaPerPersKg"
+  )
+)
+
+# * save====
+# ldfDemaCty_dt is for the reference case ssp2
+saveRDS(ldfCtyAll_dt, file = "procData_ldfCtyAll_dt.Rda")
+
+# * duplicate rows====
+anyDuplicated(
+  ldfCtyAll_dt,
+  incomparables = FALSE,
+  fromLast = FALSE,
+  by = seq_along(ldfCtyAll_dt)
+)
+
+```
+
+
+
+```{r aggregating demand, include=FALSE}
+# Description:
+# 1) aggregate demand across all 6 ldf to have a aggregate ldf demand for all ldf
+# 2) aggregate demand across all 3 red meat ldf to have a aggregate red meat demand
+# for each cty and reg have a per person and total demand value
+
+# red meat = beef, sheep (& goats), and pork 
+
+
+# REGION AGG ALL 6 LDF==========================================================
+
+# so can compare historical and projected demand for protein 
+# aggregated over 6 ldf
+ldfRegAll_dt <- readRDS(file = "procData_ldfRegAll_dt.Rda")
+
+
+# remove per person demand as compute this after aggregate
+ldfRegAll_dt$demaPerPersKg <- NULL
+
+# demand aggregated over all 6 ldf for protein only
+# value is per region per year for protein
+setkey(ldfRegAll_dt, ldfUnit)
+apdRegAll_dt <- ldfRegAll_dt[c("protein", "proteinGenus")][, .(
+  apdTot000Tons =  sum(demaTot000Tons)
+),
+by = .(reg, region, year, ldfUnit, dataType, regType, scen)]
+
+# historical population, so can calculate per person demand
+
+# reg
+popRegHist_dt <- readRDS(file = "procData_popRegHist_dt.Rda")
+popRegHist_dt$regType <- "reg"
+
+# wld
+popWldHist_dt <- readRDS(file = "procData_popWldHist_dt.Rda")
+popWldHist_dt$regType <- "wld"
+popWldHist_dt$reg <- "WLD"
+
+# bind population data
+popRegWldHist_dt <- rbind(popRegHist_dt, popWldHist_dt)
+
+popRegWldHist_dt$dataType <- "Historical"
+popRegWldHist_dt$scen <- "hist"
+
+popRegWldHist_dt
+# add reg
+impCtyReg_dt <- readRDS(file = "procData_impCtyReg_dt.Rda")
+regRegion_dt <- unique(impCtyReg_dt[, c("reg", "region")])
+
+# merge
+popRegWldHist_dt <- merge(popRegWldHist_dt, regRegion_dt,
+                       by = "reg",
+                       all.x = TRUE)
+popRegWldHist_dt[reg == "WLD", region := "World"]
+
+# projected population, so can calculate per person demand
+popRegProj_dt <- readRDS(file = "procData_popRegProj_dt.Rda")
+
+# add dataType
+popRegProj_dt$dataType <- "Projected"
+
+# add regType
+
+# label if reg or wld
+popRegProj_dt[reg ==  "WLD", regType := "wld"]
+popRegProj_dt[!reg == "WLD", regType := "reg"]
+
+# bind proj and hist pop
+popRegAll_dt <- rbind(popRegWldHist_dt, popRegProj_dt)
+
+# merge population and agg demand
+apdRegAll_dt <- merge(
+  apdRegAll_dt,
+  popRegAll_dt,
+  by = c("year", "reg", "region", "regType", "dataType", "scen")
+)
+
+# per person demand in kg
+apdRegAll_dt[, apdPerPersKg := (apdTot000Tons * 1000 * 1000) / (pop000Peop *
+                                                                        1000)]
+
+# remove population
+apdRegAll_dt <- apdRegAll_dt[, pop000Peop := NULL]
+
+# save
+saveRDS(apdRegAll_dt, file = "procData_apdRegAll_dt.Rda")
+
+
+
+# Check demand protein values 
+# sum each ldf for total and person aggrgeated over 6 ldf
+ldfRegAll_dt <- readRDS(file = "procData_ldfRegAll_dt.Rda")
+
+# demand aggregated over all 6 ldf
+# value is per region per year per data type
+setkey(ldfRegAll_dt, ldfUnit)
+
+apdRegAllCheck_dt <- ldfRegAll_dt[c("protein", "proteinGenus")][, .(
+  apdTot000Tons =  sum(demaTot000Tons),
+  apdPerPersKg  =  sum(demaPerPersKg)
+),
+by = .(reg, region, year, dataType, regType, scen, ldfUnit)]
+
+```
+
+
+
+```{r plotting ldf demand by region, include=FALSE}
+# Description: plot demand for ldf over time by region, tables for % of total
+
+# SSP2_ref is the main reference case scenario
+
+
+# LOAD DATA=====================================================================
+# region demand for each ldf
+ldfRegAll_dt <- readRDS(file = "procData_ldfRegAll_dt.Rda")
+
+# country demand for each ldf
+if(!exists("ldfCtyAll_dt")) {
+  ldfCtyAll_dt <- readRDS(file = "procData_ldfCtyAll_dt.Rda")
+}
+
+# aggregated data for protein summed across all 6 ldf
+apdRegAll_dt <- readRDS(file = "procData_apdRegAll_dt.Rda")
+
+# PLOTS=========================================================================
+# * plot options====
+# ** theme options====
+theme_opts <- list(
+  theme(
+    strip.text = element_text(size = 16),
+    strip.background = element_rect(fill = "white"),
+    legend.position = "bottom",
+    legend.text  = element_text(size = 12),
+    legend.title = element_text(size = 16),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 12,
+                               angle = 0),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14,
+                                margin = margin(t = 0,
+                                         r = -3,
+                                         b = 0,
+                                         l = 0,
+                                         unit = "mm")),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "cm")
+    
+  )
+)
+
+# ** guide options====
+
+guide_opts <- list(
+  guides(shape = guide_legend(nrow = 3,
+                              override.aes = list(size = 4, stroke = 1.5)),
+         color = guide_legend(override.aes = list(linetype = 0))))
+
+# ** region shape====
+regShape <- c(15, 16, 17,
+               18, 6, 4,
+               5, 0, 1)
+
+# ** region color====
+brewColor <- brewer.pal(9, name = 'Set1')
+regColor <- c(brewColor[[1]], 
+              brewColor[[2]],
+              brewColor[[3]],
+              brewColor[[4]], 
+              brewColor[[5]],
+              "#000000",
+              brewColor[[7]], 
+              brewColor[[8]],
+              "#000000")
+
+
+
+# report every 5th year
+fifthYr <- c(
+  "1961",
+  "1965",
+  "1970",
+  "1975",
+  "1980",
+  "1985",
+  "1990",
+  "1995",
+  "2000",
+  "2005",
+  "2010",
+  "2015",
+  "2020",
+  "2025",
+  "2030",
+  "2035",
+  "2040",
+  "2045",
+  "2050"
+)
+
+# table LDF protein content=====================================================
+ldfProtPercCty_dt <- readRDS(file = "procData_ldfProtPercCty_dt.Rda")
+
+
+# ldf as ordered factor
+ldfProtPercCty_dt$ldf <-
+  factor(
+    ldfProtPercCty_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "Poultry",
+      "Eggs",
+      "Milk"
+    )
+  )
+
+protPerc_Tab <- ldfProtPercCty_dt[,      .(
+  mean = round(mean(percProtGenusCty), 1),
+  min = round(min(percProtGenusCty), 1),
+  max = round(max(percProtGenusCty), 1)
+),
+by = .(ldf, reg)]
+
+# range
+protPerc_Tab$range <- paste(protPerc_Tab$min, protPerc_Tab$max, sep ="\226")
+protPerc_Tab$range <- paste0("(", protPerc_Tab$range,")")
+protPerc_Tab$value <- paste(protPerc_Tab$mean, protPerc_Tab$range, sep = " ")
+
+protPerc_Tab <- protPerc_Tab[, c("ldf", "reg", "value")]
+
+# long to wide
+protPerc_Tab <- dcast(protPerc_Tab,
+                      reg ~ ldf,
+                      value.var = "value"
+)
+
+
+fwrite(protPerc_Tab,
+       "output_tableSI1_protPerc.csv",
+       row.names = FALSE)
+
+
+# protein demand figures========================================================
+apdRegAll_dt
+# keep each fifth year and GENUS protein
+setkey(apdRegAll_dt, year, ldfUnit)
+apdRegAllPlot_dt <- apdRegAll_dt[CJ(
+  fifthYr,
+  "proteinGenus"
+)]
+
+# keep projected data only after 2019 for SSP2_ref
+# and all historical data
+apdRegAllPlot_dt <- apdRegAllPlot_dt[
+  (year > 2019 & scen == "SSP2_ref") |
+    scen == "hist", ]
+
+
+# * Fig. 2: per person protein demand===========================================
+
+# gen plot
+protDemaPersRegYr <-
+  ggplot(apdRegAllPlot_dt,
+         aes(
+           y = 1000 * (apdPerPersKg / 365),
+           x = as.numeric(year),
+           shape = region,
+           color = region)
+         ) +
+  geom_point(size = 2, 
+             stroke = 1, 
+             position = position_jitter(w = 0.3, h = 0)) +
+  geom_line() + 
+  facet_grid(~ dataType, scales = "free") +
+  theme_bw() + theme_opts + guide_opts +
+  scale_y_continuous(breaks = seq(0, 80, 10)) + 
+  labs(shape = "Region",
+       color = "Region",
+       x = "Year",
+       y = expression(
+                      atop(textstyle("Per person demand for livestock-derived food"),
+                      atop(textstyle("(grams protein day"^-1*")"))))) +
+ scale_shape_manual(values = regShape) +
+ scale_color_manual(values = regColor)
+
+# save plot
+ggsave(
+  file = "output_fig2_protDemaPersRegYr.tiff",
+  width = 10,
+  height = 6,
+  protDemaPersRegYr,
+  compression = "lzw"
+)
+
+# * Fig. 4: total protein demand================================================
+
+setkey(apdRegAllPlot_dt, reg)
+
+# generate total protein demand plot
+protDemaTotRegYr <-
+  ggplot(apdRegAllPlot_dt[!("WLD")],
+         aes(
+           y = apdTot000Tons / 1000,
+           x = as.numeric(year),
+           shape = region,
+           color = region
+         )) +
+  geom_point(size = 2, 
+             stroke = 1, 
+             position = position_jitter(w = 0.3, h = 0)) +
+  geom_line() + 
+  facet_grid( ~ dataType, scales = "free") +
+  theme_bw() + theme_opts + guide_opts +
+  scale_y_continuous(breaks = seq(0, 35, 5)) + 
+  labs(shape = "Region",
+       color = "Region",
+       x = "Year",
+       y = expression(
+         atop(textstyle("Total demand for livestock-derived food"),
+                   atop(textstyle("(million metric tons protein year"^-1*")"))))) +
+  scale_shape_manual(values = regShape) +
+  scale_color_manual(values = regColor)
+
+# save plot
+ggsave(
+  file = "output_fig4_protDemaTotRegYr.tiff",
+  width = 10,
+  height = 6,
+  protDemaTotRegYr,
+  compression = "lzw"
+)
+
+# * PLOT LDF-REG FAO FBS VS. SIMULATED====
+{
+# keep food 
+setkey(ldfRegAll_dt, ldfUnit, year)
+ldfRegObsSim_dt <- ldfRegAll_dt[CJ(
+  "food",
+  fifthYr
+)]
+
+# For for 2005 to 2013
+# keep projected data in 
+# SSP2_ref and historical data
+
+ldfRegObsSim_dt <- ldfRegObsSim_dt[
+  ((scen == "hist" & year < 2014) |
+     (scen == "SSP2_ref")), ]
+
+# ldf as ordered factor
+ldfRegObsSim_dt$ldf <-
+  factor(
+    ldfRegObsSim_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "Poultry",
+      "Eggs",
+      "Milk"
+    )
+  )
+
+# change scenario name and reorder
+ldfRegObsSim_dt[scen == "hist", scen := "Historical data"]
+ldfRegObsSim_dt[scen == "SSP2_ref", 
+                scen := "Projected data"]
+
+
+# ldf as ordered factor
+ldfRegObsSim_dt$scen <-
+  factor(
+    ldfRegObsSim_dt$scen,
+    ordered = TRUE,
+    levels = c(
+      "Historical data",
+      "Projected data")
+  )
+
+}
+
+# generate plot
+{
+setkey(ldfRegObsSim_dt, reg)
+ldfObsSimPerPersRegYr <-
+  ggplot(ldfRegObsSim_dt[!("WLD")],
+         aes(
+           y = demaPerPersKg,
+           x = as.numeric(year),
+           shape = scen,
+           color = scen
+         )) +
+  geom_point(size = 0.5, stroke = 0.5) +
+  geom_line(size = 0.1) + 
+  facet_wrap(ldf ~ reg, nrow = 6,
+             scales = "free_y") +
+  theme_bw() + theme_opts +
+  labs(shape = "",
+       color = "",
+       x = "Year",
+  y = expression(
+         textstyle("Per person demand (Kg year"^-1*")"))) + 
+  guides(shape = guide_legend(nrow = 1,
+                              override.aes = list(size = 6)),
+         color = guide_legend(nrow = 1,
+                              override.aes = list(linetype = 0))) +
+  theme(strip.text = element_text(size = 10),
+        axis.text.x = element_text(size = 10,
+                                   angle = 90),
+        axis.text.y = element_text(size = 10)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  scale_color_manual(values = c("#2c7bb6", "#fdae61")) +
+  scale_shape_manual(values = c(16, 2))
+
+                                    
+# save plot
+ggsave(
+  file = "output_figSI7_ldfObsSimPerPersRegYr.tiff",
+  width = 10,
+  height = 10,
+  ldfObsSimPerPersRegYr,
+  compression = "lzw"
+)
+
+}
+
+# TABLES=========================================================================
+
+# * organize data====
+
+# columns as region (8 + wld = 9) columns as year 
+# rows as year (1980, 2010, 2020, 2050) with % change 1980 to 2010 and 2020 to 2050 
+# for each ldf (6)
+
+# keep data
+ldfRegAllTab_dt <- ldfRegAll_dt[(year == 1980 & dataType == "Historical"|
+                                   year == 2010 & dataType == "Historical"|
+                                   year == 2020 & dataType == "Projected" & scen == "SSP2_ref" |
+                                   year == 2050 & dataType == "Projected" & scen == "SSP2_ref") &
+                                        ldfUnit == "food", ]
+
+# region as ordered factor with world listed 1st
+ldfRegAllTab_dt$reg <-
+  factor(
+    ldfRegAllTab_dt$reg,
+    ordered = TRUE,
+    levels = 
+      c("WLD",
+        "EAP",
+        "EUR",
+        "FSU",
+        "LAC",
+        "MEN",
+        "NAM",
+        "SAS",
+        "SSA")
+  )
+
+# ldf as ordered factor
+ldfRegAllTab_dt$ldf <-
+  factor(
+    ldfRegAllTab_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "Poultry",
+      "Eggs",
+      "Milk"
+    )
+  )
+
+# * demand per person====
+# long to wide (reshape)
+ldfRegPpsTab_dt <- dcast(ldfRegAllTab_dt,
+                            reg + ldf ~ dataType + year,
+                            value.var = "demaPerPersKg")
+
+
+# add percent change
+# 1980 to 2010 is same number years as 2020 to 2050
+nYrs <- 30
+
+ldfRegPpsTab_dt[, annPC20101980 := round(100 * ((Historical_2010 / Historical_1980) ^
+                                                         (1 / nYrs)- 1), 2)]
+
+ldfRegPpsTab_dt[, annPC20502020 := round(100 * ((Projected_2050 / Projected_2020)  ^
+                                                   (1 / nYrs)- 1), 2)]
+
+
+# round all numeric values
+ldfRegPpsTab_dt <- cbind(ldfRegPpsTab_dt[, c("reg", "ldf"), 
+                                     with = FALSE],
+                      ldfRegPpsTab_dt[, c("Historical_1980",
+                                        "Historical_2010",
+                                        "Projected_2020",
+                                        "Projected_2050",
+                                        "annPC20101980",
+                                        "annPC20502020"), 
+                                    with = FALSE][, round(.SD, 1), ])
+
+# wide to long so all numbers in one column
+ldfRegPpsLongTab_dt <-
+  melt(
+    ldfRegPpsTab_dt,
+    id.vars = c("reg",
+                "ldf"),
+    value.name = "demand",
+    variable.name = "time"
+  )
+
+# long to wide (reshape) so region as individual columns
+ldfRegPpsWideTab_dt <- dcast(ldfRegPpsLongTab_dt,
+                       ldf + time ~ reg,
+                       value.var = "demand")
+
+# save per person demand
+fwrite(ldfRegPpsWideTab_dt,
+       "output_table2_ldfRegPps.csv",
+       row.names = FALSE)
+
+
+# * total demand====
+
+# demand in millions
+ldfRegAllTab_dt[, demaTotMillTons := demaTot000Tons / 1000]
+
+# long to wide (reshape)
+ldfRegAllTab_dt$region <- NULL
+ldfRegTotTab_dt <- dcast(ldfRegAllTab_dt,
+                           reg + ldf ~ dataType + year,
+                           value.var = "demaTotMillTons")
+
+
+# add percent change
+
+ldfRegTotTab_dt[, annPC20101980 := round(100 * ((Historical_2010 / Historical_1980) ^
+                                                  (1 / nYrs)- 1), 2)]
+
+ldfRegTotTab_dt[, annPC20502020 := round(100 * ((Projected_2050 / Projected_2020)  ^
+                                                  (1 / nYrs)- 1), 2)]
+
+
+ldfRegTotTab_dt <- cbind(ldfRegTotTab_dt[, c("reg", "ldf"), 
+                                     with = FALSE],
+                         ldfRegTotTab_dt[, c("Historical_1980",
+                                        "Historical_2010",
+                                        "Projected_2020",
+                                        "Projected_2050",
+                                        "annPC20101980",
+                                        "annPC20502020"), 
+                                     with = FALSE][, round(.SD, 1), ])
+
+# wide to long so all numbers in one column
+ldfRegTotTab_dt <-
+  melt(
+    ldfRegTotTab_dt,
+    id.vars = c("reg",
+                "ldf"),
+    value.name = "demand",
+    variable.name = "time"
+  )
+
+# long to wide (reshape) so region as individual columns
+ldfRegTotTab_dt <- dcast(ldfRegTotTab_dt,
+                       ldf + time ~ reg,
+                       value.var = "demand")
+
+# save total demand
+fwrite(ldfRegTotTab_dt,
+       "output_tableSI3_ldfRegTot.csv",
+       row.names = FALSE)
+
+
+# * % cont of each region to ldf demand by ldf==========================
+
+# remove % change rows
+ldfRegTotCont_dt <- ldfRegTotTab_dt[!(time == "annPC20101980" |
+                                    time == "annPC20502020"), ]
+
+
+# wide to long 
+ldfRegTotCont_dt <-
+  melt(
+    ldfRegTotCont_dt,
+    id.vars = c("ldf",
+                "time",
+                "WLD"),
+    value.name = "demand",
+    variable.name = "reg"
+  )
+
+# % of total
+ldfRegTotCont_dt[, percCont := round(100 *(demand / WLD), 1) ]
+
+# long to wide
+ldfRegTotCont_dt <- dcast(ldfRegTotCont_dt,
+                       ldf + time + WLD ~ reg,
+                       value.var = "percCont")
+
+# * % cont of each ldf to demand by region==============================
+# keep data
+ldfRegContTot_dt <- ldfRegAll_dt[(year == 1980 & dataType == "Historical" |
+                 year == 2010 & dataType == "Historical" |
+                 year == 2020 & dataType == "Projected" & scen == "SSP2_ref" |
+                 year == 2050 & dataType == "Projected" & scen == "SSP2_ref") &
+                ldfUnit == "proteinGenus", ]
+
+
+# remove regType
+ldfRegContTot_dt[, c("ldfUnit", "regType", "scen") := NULL]
+
+
+# wide to long
+ldfRegContTot_dt <- melt(
+  ldfRegContTot_dt,
+  id.vars = c("reg",
+              "region",
+              "year",
+              "ldf",
+              "dataType"),
+  variable.name = "demandType",
+  value.name =    "demand"
+)
+
+# long to wide
+ldfRegContTot_dt <- dcast(ldfRegContTot_dt,
+                     region + reg + year + dataType + demandType ~ ldf,
+                                 value.var = "demand")
+# sum
+ldfRegContTot_dt[, totDemProt := Beef + Sheep + Pork + Poultry + Eggs + Milk]
+
+# percent
+ldfRegContTot_dt[, perBeef    := round(100 * (Beef  / totDemProt), 1)]
+ldfRegContTot_dt[, perSheep   := round(100 * (Sheep / totDemProt), 1)]
+ldfRegContTot_dt[, perPork    := round(100 * (Pork / totDemProt), 1)]
+ldfRegContTot_dt[, perPoultry := round(100 * (Poultry / totDemProt), 1)]
+ldfRegContTot_dt[, perEggs    := round(100 * (Eggs / totDemProt), 1)]
+ldfRegContTot_dt[, perMilk    := round(100 * (Milk / totDemProt), 1)]
+
+ldfRegContTot_dt[, totPerc  := perBeef + perSheep + perPork +
+                perPoultry + perEggs + perMilk]
+
+# wide to long
+
+ldfRegContTot_dt <- melt(
+  ldfRegContTot_dt,
+  id.vars = c("reg", "region", "year", "dataType", "demandType"),
+  variable.name = "item",
+  value.name    = "value"
+)
+
+# id if total or %
+ldfRegContTot_dt[ , percOrTot  :=  "perc"]
+ldfRegContTot_dt[item == "Beef" | 
+              item == "Sheep" | 
+              item == "Pork" |
+              item == "Poultry" | 
+              item == "Eggs" | 
+              item == "Milk"|
+              item == "totDemProt"
+                , percOrTot :=  "tot"]
+
+
+
+ldfRegContTot_dt <- ldfRegContTot_dt[!(item == "totDemProt" |
+                                 item == "totPerc")]
+                                     
+# * stacked bar chart for ldf contribution====
+
+# year as factor
+ldfRegContTot_dt$year <- as.factor(ldfRegContTot_dt$year)
+ldfRegContTot_dt$year <- factor(ldfRegContTot_dt$year,
+                             levels = rev(levels(ldfRegContTot_dt$year)))
+
+
+brewerColorAsf <- brewer.pal(9, name = 'Greys')
+brewerColorAsf
+ldfColors <- c(brewerColorAsf[[1]],
+               brewerColorAsf[[9]],
+               brewerColorAsf[[2]],
+               brewerColorAsf[[8]],
+               brewerColorAsf[[3]],
+               brewerColorAsf[[7]]
+)
+
+# region as ordered factor
+ldfRegContTot_dt$region <-
+  factor(
+    ldfRegContTot_dt$region,
+    ordered = TRUE,
+    levels = c(
+      "World",
+      "East Asia & Pacific",
+      "Europe",
+      "Former Soviet Union",
+      "Latin America & Caribbean",
+      "Middle East & North Africa",
+      "North America",
+      "South Asia",
+      "Sub-Saharan Africa"
+    )
+  )
+
+# plot
+# setkey to plot each ldf % of total protein
+setkey(ldfRegContTot_dt, demandType, percOrTot)
+ldfRegContTot_plot <-
+  ggplot(ldfRegContTot_dt[.("demaPerPersKg", "perc")],
+         aes(x = year,
+             y = value,
+             fill = item)) +
+  geom_bar(position = "stack", 
+           stat = "identity",
+           width = 0.5,
+           colour = "black") +
+  coord_flip() +
+  facet_wrap(~ region, 
+             nrow = 3) + 
+  theme_bw() + theme_opts +
+  scale_y_continuous(breaks = seq(0, 100, 25),
+                     position = "left") +
+  scale_fill_manual(values = ldfColors,
+                    labels = c("Beef", "Sheep",
+                               "Pork", "Poultry",
+                               "Eggs", "Milk")) +
+  labs(x = "Year",
+       y = "Percent of total demand",
+       fill = "Livestock-derived food") + 
+  guides(fill  = guide_legend(nrow = 1,
+                              reverse = TRUE)) + 
+  theme(strip.text = element_text(size = 12),
+        axis.text.x = element_text(size = 12,
+                                   angle = 0),
+        axis.title.y = element_text(size = 16,
+                                    margin = margin(r = 1,
+                                                    unit = "mm")))
+
+# save plot
+ggsave(
+  file = "output_figSI6_ldfContTotReg.tiff",
+  width  = 9,
+  height = 9,
+  ldfRegContTot_plot,
+  compression = "lzw"
+)
+
+
+```
+
+
+
+```{r plotting SSP effects, include=FALSE}
+# Description: effect of SSP on change in per person and total demand 
+# for each ldf over time by region
+# annual percentage change is from CAGR
+
+
+# LOAD ALL DATA FOR REGIONS=====================================================
+
+# * load region demand====
+ldfRegProj_dt <- readRDS(file = "procData_ldfRegProj_dt.Rda")
+
+# * load reg cal cont==== 
+
+genusRegWld_dt <- fread("rawData_genusRegWld_dt.csv")
+genusRegWld_dt$percProtRegGenus <- NULL
+
+# data check
+
+# total demand in each regType must be the same
+ldfRegProjTotDemand_dt <- ldfRegProj_dt[, .(
+  demaTot000Tons =  sum(demaTot000Tons)),
+  by = .(scen, regType)]
+ldfRegProjTotDemand_dt <- setorder(ldfRegProjTotDemand_dt, scen)
+
+
+# * organize data====
+
+# keep 3 SSP with ref income elasticities
+# for each SSP in 2020 and 2050 for "food"
+
+ldfProjScen_dt <- ldfRegProj_dt[(scen == "SSP1_ref" |
+                                 scen == "SSP2_ref" |
+                                 scen == "SSP3_ref") &
+                                 (year == "2020" |
+                                  year == "2050") &
+                                  ldfUnit == "food", ]
+
+# keep needed columns for tab and fig
+ldfProjScen_dt <-
+  ldfProjScen_dt[, c("reg",
+                     "region",
+                     "scen",
+                     "year",
+                     "ldf",
+                     "demaTot000Tons",
+                     "demaPerPersKg")]
+
+# demand in millions of tons
+ldfProjScen_dt[, demaTotMillionTons := demaTot000Tons / 1000]
+
+
+# demand in one column (reshape: wide to long)
+ldfProjScen_dt <- melt(ldfProjScen_dt,
+                  id.vars = c("reg",
+                              "region",
+                              "scen",
+                              "year",
+                              "ldf"),
+                  measure.vars = c("demaTotMillionTons",
+                                   "demaPerPersKg"),
+                  variable.name = "dataType",
+                  value.name = "demand"
+)
+
+
+# year in seperate columns (reshape: long to wide)
+ldfProjScen_dt <- dcast(ldfProjScen_dt,
+                           region + reg + scen + ldf + 
+                            dataType  ~ year, 
+                            value.var = "demand")
+
+# percent change over all years
+# number years for annual % change 
+nYrs <- 2050 - 2020
+ldfProjScen_dt[ , annPC20502020 := round(100 * ((`2050` / `2020`) ^
+                                             (1 / nYrs)- 1), 2)]
+
+# * common color for ssps====
+# http://colorbrewer2.org/#type=sequential&scheme=BuGn&n=3
+brewColorSsp <- brewer.pal(11, name = 'BrBG')
+sspColor <- c(brewColorSsp[[8]], # SSP1
+              brewColorSsp[[6]], # SSP2
+              brewColorSsp[[3]]) # SSP3
+
+# region as ordered factor
+ldfProjScen_dt$region <-
+  factor(
+    ldfProjScen_dt$region,
+    ordered = TRUE,
+    levels = c(
+      "World",
+      "East Asia & Pacific",
+      "Europe",
+      "Former Soviet Union",
+      "Latin America & Caribbean",
+      "Middle East & North Africa",
+      "North America",
+      "South Asia",
+      "Sub-Saharan Africa"
+    )
+  )
+
+
+# * ldf as ordered factor
+ldfProjScen_dt$ldf <-
+  factor(
+    ldfProjScen_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "Poultry",
+      "Eggs",
+      "Milk"
+    )
+  )
+
+# CHANGE IN INDIVIDUAL LDF DEMAND BY REGION=====================================
+
+# * reg per person demand per ldf====
+# filter data to keep
+setkey(ldfProjScen_dt, dataType)
+
+ldfProjScen_dt[, redmeat := "Not red Meat"]
+ldfProjScen_dt[ldf == "Beef" | ldf == "Sheep"  | ldf == "Pork",
+               redmeat := "Red Meat"]
+
+ldfPerPersReg <- ggplot(data = ldfProjScen_dt[.("demaPerPersKg")],
+            aes(x = ldf)) +
+  geom_bar(
+    aes(y = annPC20502020, fill = scen),
+    stat = "identity",
+    width = 0.8, 
+    position = "dodge",
+    color = "black"
+  ) + facet_wrap( ~ region) +
+  scale_fill_manual("Shared socioeconomic pathway (SSP)", 
+                    labels = c("SSP1",
+                               "SSP2",
+                               "SSP3"),
+                    values = sspColor) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1)) + 
+  labs(x     = "Livestock-derived food",
+       y     = "Annual percent change\n in per person demand (2020 to 2050)",
+       title = "") +
+  theme_bw() +
+  theme(
+    strip.background = element_rect(fill = "white"),
+    strip.text.x = element_text(size = 16),
+    legend.key.size = unit(1, "cm"),
+    legend.position = "bottom",
+    legend.text  = element_text(size = 16),
+    legend.title = element_text(size = 18),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 16, angle = 90),
+    axis.text.y = element_text(size = 16),
+    axis.title = element_text(size = 20),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "cm")
+  ) 
+
+# save reg per person plot
+ggsave(
+  file = "output_fig3_ldfPerPersReg.tiff",
+  ldfPerPersReg,
+  width  = 12,
+  height = 12,
+  compression = "lzw"
+)
+
+# * reg total demand per ldf====
+
+# setkey to subset data
+setkey(ldfProjScen_dt, dataType)
+
+# gen reg tot plot 
+# recycle per person region plot object (ldfPerPersReg) 
+# and only change data source and ylab
+ldfTotReg <- ldfPerPersReg %+% ldfProjScen_dt[.("demaTotMillionTons")] +
+  labs(y = "Annual percent change\n in total demand (2020 to 2050)")
+
+# save reg tot plot
+ggsave(
+  file = "output_figSI8_ldfTotReg.tiff",
+  ldfTotReg,
+  width  = 24,
+  height = 24,
+  compression = "lzw"
+)
+
+
+# tables for range of changes====
+# want to know range of % changes 
+# in total demand for ldf depending on SSP
+# use protein (from GENuS)
+
+# * organize data====
+# keep 3 SSP with ref income elasticities
+# for each SSP in 2020 and 2050 for "protein"
+
+ldfProjPScen_dt <- ldfRegProj_dt[(scen == "SSP1_ref" |
+                                  scen == "SSP2_ref" |
+                                  scen == "SSP3_ref") &
+                                  (year == "2020" |
+                                     year == "2050") &
+                                  ldfUnit == "proteinGenus", ]
+
+
+# sum so get total for all ldf for protein (from GENuS)
+
+aggAsfProtReg_dt <- ldfProjPScen_dt[, .(
+  demaTot000Tons =  sum(demaTot000Tons),
+  demaPerPersKg =  sum(demaPerPersKg)
+),
+by = .(reg, year, scen)]
+
+
+# year in seperate columns (reshape: long to wide)
+aggAsfProtReg_dt <- dcast(aggAsfProtReg_dt,
+                        reg + scen
+                          ~ year, 
+                        value.var = c("demaTot000Tons", "demaPerPersKg"))
+
+# percent change over all years
+aggAsfProtReg_dt[, percChange5020Tot := round(100 * (demaTot000Tons_2050 - demaTot000Tons_2020) / demaTot000Tons_2020, 1)]
+aggAsfProtReg_dt[, percChange5020PerPers := round(100 * (demaPerPersKg_2050 - demaPerPersKg_2020) / demaPerPersKg_2020, 1)]
+
+
+# CALORIES DEMANDED=============================================================
+
+# keep SSP2 ref and "food" and 2005 and 2050
+{
+setkey(ldfRegProj_dt, scen, ldfUnit, year)
+ldfCal_dt <- ldfRegProj_dt[CJ(
+  c("SSP2_ref"),
+  "food",
+  c("2005", "2050")
+)]
+
+ldfCal_dt <- ldfCal_dt[, c("reg", "ldf", "year",
+                           "demaTot000Tons",
+                           "demaPerPersKg")]
+
+ldfCal_dt <- merge(ldfCal_dt, genusRegWld_dt,
+      by = c("reg", "ldf"))
+
+# total kcal demand in GJ
+# 1 GJ = 238902957.6186153 kcal
+gJkcal <- 238902957.6186153
+
+ldfCal_dt[, gjDemTot := (demaTot000Tons * 1000 * 1000 *
+            kcalPerKgGenus) / gJkcal]
+
+ldfCal_dt[, calDemPerPers := (demaPerPersKg *
+                           kcalPerKgGenus)]
+
+ldfCal_dt <- ldfCal_dt[, c("reg", "ldf", "year", 
+                           "gjDemTot",
+                           "calDemPerPers")]
+# sum cal over ldf
+calTot_dt <- ldfCal_dt[,. (gjDemTot = sum(gjDemTot),
+                           calDemPerPers = sum(calDemPerPers)
+                           ),
+                       by = .(year, reg)]
+
+# long to wide
+calTot_dt <- dcast(calTot_dt,
+                       reg ~ year,
+                       value.var = c("gjDemTot", "calDemPerPers"))
+
+calTot_dt[, perPersChange := round(100 * (calDemPerPers_2050 - calDemPerPers_2005)/
+            calDemPerPers_2005, 0)]
+calTot_dt[, totChange := round(100 * (gjDemTot_2050 - gjDemTot_2005)/
+            gjDemTot_2005, 0)]
+}
+
+```
+
+
+
+```{r plotting demand effect, include=FALSE}
+# Description: demand effect of changes in income elasticity for red meat 
+# in (1) all world (2) high-income cty (HIC) 
+# (3) low- and middle-income cty (LMIC)
+
+
+# LOAD DATA=====================================================================
+if(!exists("ldfCtyProj_dt")) {
+ldfCtyProj_dt <- readRDS(file = "procData_ldfCtyProj_dt.Rda")
+}
+
+# DEMAND BY INC GRP========================================================
+# for each red meat ldf (beef, sheep, pork) and for aggregate red meat
+# by year, scenario, income class, and protein-food
+# calc as per person demand sum of demand in group / sum all people
+
+ldfCtyProjIncE_dt <- ldfCtyProj_dt[
+                                  (year == 2020 |
+                                     year == 2050) 
+                                 & (ldf == "Beef" |
+                                      ldf == "Sheep" |
+                                      ldf == "Pork"), ]
+
+# keep needed columns for all dt
+ldfCtyProjIncE_dt <-
+  ldfCtyProjIncE_dt[, c("reg",
+                     "impCountry",
+                     "cty",
+                     "wbCtyIncClass",
+                     "year",
+                     "ldf",
+                     "ldfUnit",
+                     "scen",
+                     "demaTot000Tons",
+                     "demaPerPersKg")]
+
+# high income vs. not high income column
+ldfCtyProjIncE_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "LMIC"]
+ldfCtyProjIncE_dt[(wbCtyIncClass == "High income"), wbCtyIncClass := "HIC"]
+
+
+# copy dt
+ldfCtyProjIncECty_dt <- copy(ldfCtyProjIncE_dt)
+
+# drop per person demand
+# remove unneeded columns for 2020
+ldfCtyProjIncE_dt <- ldfCtyProjIncE_dt[, demaPerPersKg := NULL]
+
+
+# total demand for individual ldf by wb income class by year and scen
+# sum ldf demand and population over WB classes
+ldfIncEWbInc_dt <- ldfCtyProjIncE_dt[, .(
+  demaTot000Tons =  sum(demaTot000Tons)),
+  by = .(wbCtyIncClass, year, ldf, ldfUnit, scen)]
+
+# world total 
+ldfIncEWld_dt <- ldfCtyProjIncE_dt[, .(
+  demaTot000Tons =  sum(demaTot000Tons)),
+  by = .(year, ldf, ldfUnit, scen)]
+ldfIncEWld_dt$wbCtyIncClass <- "ALL"
+
+ldfIncEWbInc_dt <- rbind(ldfIncEWbInc_dt, ldfIncEWld_dt)
+
+# add population of each cty
+#popCtyProj_dt <- readRDS(file = "procData_popCtyProj_dt.Rda")
+popCtyProj_dt <- fread("rawData_popCtyProj_dt.csv")
+popCtyProj_dt$year <- as.character(popCtyProj_dt$year)
+
+
+# keep relevant scenarios for all dt
+popCtyProjIncE_dt <- popCtyProj_dt[
+  (year == "2020" |
+     year == "2050"), ]
+
+
+# high income vs not high income column
+popCtyProjIncE_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "LMIC"]
+popCtyProjIncE_dt[wbCtyIncClass == "High income", wbCtyIncClass := "HIC"]
+
+# total population in each WB income class by scenario and year
+# sum ldf demand and population over WB classes
+popWbIncClass_dt <- popCtyProjIncE_dt[, .(pop000Peop =  sum(pop000Peop)),
+                                      by = .(wbCtyIncClass, year, scen)]
+popWld_dt <- popCtyProjIncE_dt[, .(pop000Peop =  sum(pop000Peop)),
+                                      by = .(year, scen)]
+popWld_dt$wbCtyIncClass <- "ALL"
+
+popWbIncClass_dt <- rbind(popWbIncClass_dt, popWld_dt)
+
+# merge pop and demand 
+ldfIncEWbInc_dt <- merge(popWbIncClass_dt, ldfIncEWbInc_dt,
+                         by = c("year", "wbCtyIncClass", "scen"))
+
+
+# per person demand
+ldfIncEWbInc_dt[, demaPerPersKg := (demaTot000Tons * 1000 * 1000) / (pop000Peop *
+                                                                       1000)]
+ldfIncEWbInc_dt$pop000Peop <- NULL
+
+
+# demand in one column
+# wide to long so demand in one column
+ldfIncEWbInc_dt <-
+  melt(
+    ldfIncEWbInc_dt,
+    id.vars = c("year",
+                "wbCtyIncClass",
+                "ldfUnit",
+                "ldf",
+                "scen"
+    ),
+    value.name = "dem",
+    variable.name = "demUnit"
+  )
+
+# rename demUnit
+ldfIncEWbInc_dt[demUnit == "demaPerPersKg", demUnit := "perPersKg"]
+ldfIncEWbInc_dt[demUnit == "demaTot000Tons", demUnit := "Tot000Tons"]
+
+
+
+# long to wide so years as column and can calc % change
+ldfIncEWbIncWide_dt <- dcast(ldfIncEWbInc_dt,
+                             wbCtyIncClass +
+                             ldfUnit +
+                             ldf + demUnit + scen ~ year, 
+                           value.var = "dem")
+
+
+# * food ====
+# % change from in ldf food demand from 2020 to 2050 for each incE in a new dt
+setkey(ldfIncEWbIncWide_dt, ldfUnit)
+ldfIncEWbIncFood_dt <- ldfIncEWbIncWide_dt["food"]
+
+
+ldfIncEWbIncFood_dt[, percChange := 100 * (`2050`  - `2020`)/ `2020`]
+
+
+# SSP and scen col
+ldfIncEWbIncFood_dt$ssp <- sub("_.*", "", ldfIncEWbIncFood_dt$scen)
+ldfIncEWbIncFood_dt$incElas <- sub(".*_", "", ldfIncEWbIncFood_dt$scen)
+
+ldfIncEWbIncFood_dt$scen <- NULL
+
+# long to wide so all scen as a column
+ldfIncEWbIncFood_dt <- dcast(ldfIncEWbIncFood_dt,
+                             ssp + wbCtyIncClass +
+                               ldfUnit +
+                               ldf + demUnit ~ incElas, 
+                             value.var = c("2020", "2050", "percChange"))
+
+
+
+# keep needed cols for table
+ldfIncEWbIncFood_dt <- ldfIncEWbIncFood_dt[, c("ssp",
+                                               "wbCtyIncClass",
+                                               "ldfUnit",
+                                               "ldf",
+                                               "demUnit",
+                                               "2020_ref",
+                                               "percChange_ref",
+                                               "percChange_rm50LAllCty",
+                                               "percChange_rm100LAllCty",
+                                               "percChange_rm50LHiCty",
+                                               "percChange_rm100LHiCty",
+                                               "percChange_rmNegPt02HiCty"
+                                               )]
+
+# * protein ====
+# aggregated over the 3 red meats
+
+setkey(ldfIncEWbInc_dt, ldfUnit)
+ldfIncEWbIncProt_dt <- ldfIncEWbInc_dt["proteinGenus"]
+
+# sum over all ldf so have demand for red meat
+rmIncEWbIncProt_dt <- ldfIncEWbIncProt_dt[, .(
+  dem =  sum(dem)),
+  by = .(wbCtyIncClass, year, demUnit, scen)]
+
+
+# long to wide so year in col to calc % change
+rmIncEWbIncProtWide_dt <- dcast(rmIncEWbIncProt_dt,
+                             wbCtyIncClass +
+                             demUnit + scen ~ year, 
+                             value.var = "dem")
+
+
+rmIncEWbIncProtWide_dt[, percChange := 100 * (`2050`  - `2020`)/ `2020`]
+
+# SSP and scen col
+rmIncEWbIncProtWide_dt$ssp <- sub("_.*", "", rmIncEWbIncProtWide_dt$scen)
+rmIncEWbIncProtWide_dt$incElas <- sub(".*_", "", rmIncEWbIncProtWide_dt$scen)
+
+rmIncEWbIncProtWide_dt$scen <- NULL
+
+# long to wide so all incE as a column
+rmIncEWbIncProtWide_dt <- dcast(rmIncEWbIncProtWide_dt,
+                             ssp + wbCtyIncClass +
+                             demUnit ~ incElas, 
+                             value.var = c("2020", "2050", "percChange"))
+
+# keep needed cols for table
+rmIncEWbIncProtWide_dt <- rmIncEWbIncProtWide_dt[, c("ssp",
+                                                     "wbCtyIncClass",
+                                                     "demUnit",
+                                                     "2020_ref",
+                                                     "percChange_ref",
+                                                     "percChange_rm50LAllCty",
+                                                     "percChange_rm100LAllCty",
+                                                     "percChange_rm50LHiCty",
+                                                     "percChange_rm100LHiCty",
+                                                     "percChange_rmNegPt02HiCty"
+                                                     )]
+
+rmIncEWbIncProtWide_dt$ldf <- "red meat"
+rmIncEWbIncProtWide_dt$ldfUnit <- "proteinGenus"
+
+
+# row bind data
+redMeatAv_dt <- rbind(rmIncEWbIncProtWide_dt, ldfIncEWbIncFood_dt) 
+
+# column order
+redMeatAv_dt <- setcolorder(
+  redMeatAv_dt,
+  c("ssp",
+    "wbCtyIncClass",
+    "ldf",
+    "ldfUnit",
+    "demUnit",
+    "2020_ref",
+    "percChange_ref",
+    "percChange_rm50LAllCty",
+    "percChange_rm100LAllCty",
+    "percChange_rm50LHiCty",
+    "percChange_rm100LHiCty",
+    "percChange_rmNegPt02HiCty"
+  )
+)
+
+# round all numeric columns to 1 dp
+redMeatAv_dt <- data.frame(lapply(redMeatAv_dt, function(y) if(is.numeric(y)) round(y, 1) else y))
+redMeatAv_dt <- as.data.table(redMeatAv_dt)
+
+# reorder red meat ldf as ordered factor
+redMeatAv_dt$ldf <-
+  factor(
+    redMeatAv_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "red meat"
+    )
+  )
+
+# order data
+redMeatAv_dt <- setorder(redMeatAv_dt, ssp, demUnit, ldf, wbCtyIncClass)
+
+
+# Table for per person demand 
+# for red meat in 3 groups
+setkey(redMeatAv_dt, demUnit, ldf)
+redMeatSSPElast_dt <- redMeatAv_dt[.("perPersKg", "red meat")]
+redMeatSSPElast_dt <- setorder(redMeatSSPElast_dt, wbCtyIncClass)
+fwrite(redMeatSSPElast_dt, 
+       "output_table3_redMeatScenDemaSSP.csv",
+       row.names = FALSE)
+
+
+# Table for demand for SSP into SI by all individual red meat LDF
+setkey(redMeatAv_dt, ssp)
+fwrite(redMeatAv_dt["SSP2"],
+       "output_tableSI4_redMeatScen.csv",
+       row.names = FALSE)
+
+
+# MIN AND MAX BY CTY============================================================
+# within a WB income group
+
+# SSP and scen col
+ldfCtyProjIncECty_dt$ssp <- sub("_.*", "", ldfCtyProjIncECty_dt$scen)
+ldfCtyProjIncECty_dt$incElas <- sub(".*_", "", ldfCtyProjIncECty_dt$scen)
+
+ldfCtyProjIncECty_dt$scen <- NULL
+
+# wide to long so demand in one column
+ldfCtyProjIncECty_dt <-
+  melt(
+    ldfCtyProjIncECty_dt,
+    id.vars = c(
+      "cty",
+      "impCountry",
+      "reg",
+      "wbCtyIncClass",
+      "year",
+      "ldfUnit",
+      "ldf",
+      "ssp",
+      "incElas"
+    ),
+    value.name = "dem",
+    variable.name = "demUnit"
+  )
+
+# rename demUnit
+ldfCtyProjIncECty_dt[demUnit == "demaPerPersKg", demUnit := "perPersKg"]
+ldfCtyProjIncECty_dt[demUnit == "demaTot000Tons", demUnit := "Tot000Tons"]
+
+
+# long to wide so year as a separate columns
+ldfCtyProjIncECty_dt <- dcast(
+  ldfCtyProjIncECty_dt,
+  cty +
+    impCountry +
+    reg +
+    wbCtyIncClass +
+    ldfUnit +
+    ldf + demUnit + ssp + incElas ~  year,
+  value.var = "dem"
+)
+
+
+# % changes
+ldfCtyProjIncECty_dt[, percChange := 100 * (`2050`  - `2020`) / `2020`]
+
+# long to wide so all incE as a column
+ldfCtyProjIncECty_dt <- dcast(
+  ldfCtyProjIncECty_dt,
+  cty +
+    impCountry +
+    reg +
+    wbCtyIncClass +
+    ldfUnit +
+    ldf + demUnit + ssp ~ incElas,
+  value.var = c("2020", "2050", "percChange")
+)
+
+# keep needed columns
+ldfCtyProjIncECty_dt <- ldfCtyProjIncECty_dt[, c(
+  "cty",
+  "impCountry",
+  "reg",
+  "wbCtyIncClass",
+  "ldfUnit",
+  "ldf",
+  "demUnit",
+  "ssp",
+  "2020_ref",
+  "percChange_ref",
+  "percChange_rm50LAllCty",
+  "percChange_rm100LAllCty",
+  "percChange_rm50LHiCty",
+  "percChange_rm100LHiCty"
+)]
+
+# wide to long, so all scenarios in one column
+ldfCtyProjIncECty_dt <-
+  melt(
+    ldfCtyProjIncECty_dt,
+    id.vars = c("wbCtyIncClass",
+                "cty",
+                "impCountry",
+                "reg",
+                "ldfUnit",
+                "ldf",
+                "demUnit",
+                "ssp"
+    ),
+    value.name = "val",
+    variable.name = "scenVar"
+  )
+
+# min and max by wb group for each ldf in food
+setkey(ldfCtyProjIncECty_dt, ldfUnit)
+
+# data for cty ldf in separate table for food, absolute value in 2020
+ldfCtyProjIncECty_dt <- ldfCtyProjIncECty_dt["food"][, .(
+  min =  round(min(val), 0),
+  max =  round(max(val), 0)),
+  by = .(wbCtyIncClass, ldf, demUnit, scenVar, ssp)]
+
+
+ldfCtyProjIncECty_dt$range <- paste(ldfCtyProjIncECty_dt$min, 
+                                    ldfCtyProjIncECty_dt$max, sep ="\226")
+ldfCtyProjIncECty_dt[ , c("min", "max") := NULL]
+
+# long to wide, so scen as colums
+ldfCtyProjIncECty_dt <- dcast(ldfCtyProjIncECty_dt,
+                               wbCtyIncClass +
+                               ldf + 
+                               demUnit + ssp ~ scenVar, 
+                             value.var = "range")
+
+# red meat ldf as ordered factor
+ldfCtyProjIncECty_dt$ldf <-
+  factor(
+    ldfCtyProjIncECty_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork"
+    )
+  )
+
+ldfCtyProjIncECty_dt <- setorder(ldfCtyProjIncECty_dt, demUnit, wbCtyIncClass, ldf, ssp)
+ldfCtyProjIncECty_dt
+
+# save
+setkey(ldfCtyProjIncECty_dt, ssp)
+fwrite(ldfCtyProjIncECty_dt["SSP2"],
+       "output_tableSI5_elastScenMinMax.csv",
+       row.names = FALSE)
+
+
+# HIC vs. LMIC contribution===
+
+incGrpCont_dt <- ldfCtyProj_dt[(scen == "SSP1_ref" |
+                                  scen == "SSP2_ref" |
+                                  scen == "SSP3_ref"
+) &
+  (year == 2020 |
+     year == 2050) 
+& (ldf == "Beef" |
+     ldf == "Sheep" |
+     ldf == "Pork") &  
+  ldfUnit == "proteinGenus", ]
+
+
+# high income vs. not high income column
+incGrpCont_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "LMIC"]
+incGrpCont_dt[wbCtyIncClass == "High income", wbCtyIncClass := "HIC"]
+
+# total demand for individual ldf by wb income class by year and scen
+incGrpCont_dt <- incGrpCont_dt[, .(
+  demaTot000Tons =  sum(demaTot000Tons)),
+  by = .(wbCtyIncClass, year, scen)]
+
+incGrpCont_dt <- dcast(incGrpCont_dt,
+                       scen + year ~ wbCtyIncClass)
+
+
+incGrpCont_dt[, percLMIC := round(100 * LMIC / (HIC + LMIC), 0)]
+incGrpCont_dt[, percHICPerc := round(100 * HIC / (HIC + LMIC), 0)]
+
+```
+
+
+
+```{r calculating largest red meat demand, include=FALSE}
+# Description: calculate the cty with largest demand for red meat in ref case and in fbs 
+# by impact reg 8
+
+# LIBRARIES=====================================================================
+library("data.table")
+
+# disable scientific notation
+options(scipen = 999)
+
+# ORG DATA======================================================================
+# load and org cty data
+if(!exists("ldfCtyAll_dt")) {
+ldfCtyAll_dt <- readRDS(file = "procData_ldfCtyAll_dt.Rda")
+}
+
+ldfCtyAll_dt
+# filter by years for protein
+# projected for 2020 and 2050, and historical for 1980 and 2010
+ldfCtyScen_dt <- ldfCtyAll_dt[(((year == "1980" |
+                                    year == "2010") &
+                                   (dataType == "Historical")
+) |
+  ((year == "2020" |
+      year == "2050") &
+     (dataType == "Projected" & scen == "SSP2_ref")
+  ))
+& ldfUnit == "proteinGenus"
+, ]
+
+
+# LDF RANK CTY BY REG===========================================================
+
+# rank demand by cty for each ldf by reg for total country demand
+setorder(setDT(ldfCtyScen_dt), -demaTot000Tons)[, ctyRankAgpByReg := seq_len(.N),
+                                               by = c("year", "dataType", "ldf", "reg")]
+
+# keep a list of largest total demand for protein in 2050 by reg for total country demand
+setkey(ldfCtyScen_dt, ctyRankAgpByReg, year, ldf)
+ctyListBeef2050_dt <- ldfCtyScen_dt[.(1, "2050", "Beef")]
+
+# keep relevant columns
+ctyListBeef2050_dt <- ctyListBeef2050_dt[, c("cty", "reg", "wbCtyIncClass")]
+
+
+# RED MEAT RANK CTY IN REG======================================================
+setkey(ldfCtyScen_dt, ldf)
+redMeatCtyScen_dt <- ldfCtyScen_dt[CJ(
+  c("Beef", "Sheep", "Pork"))][, .(
+  demaTot000Tons = sum(demaTot000Tons),
+  demaPerPersKg =  sum(demaPerPersKg)),
+  by = .(year, cty, country, reg, dataType, wbCtyIncClass)]
+
+
+# rank red meat demand by cty by reg for total country demand
+setorder(setDT(redMeatCtyScen_dt),-demaTot000Tons)[, ctyRankRmByReg := seq_len(.N),
+                                               by = c("year", "dataType", "reg")]
+
+# rank red meat demand by cty by reg for per person demand
+setorder(setDT(redMeatCtyScen_dt),-demaPerPersKg)[, ctyRankRmByRegPerPerson := seq_len(.N),
+                                                   by = c("year", "dataType", "reg")]
+
+
+# keep a list of largest total demand for red meat protein in 2050 by reg for total country demand
+setkey(redMeatCtyScen_dt, ctyRankRmByReg, year)
+ctyListRedMeat2050_dt <- redMeatCtyScen_dt[.(1, "2050")]
+
+ctyListRedMeat2050_dt <- ctyListRedMeat2050_dt[, c("cty", "reg", "wbCtyIncClass")]
+
+# save list
+saveRDS(ctyListRedMeat2050_dt, file = "procData_ctyListRedMeat2050_dt.Rda")
+
+
+```
+
+
+
+```{r drivers of demand, include=FALSE}
+
+# Description: drivers of demand in cty with largest total 
+# beef demand per IMPACT region in 2050
+
+
+# LOAD CTY LIST=================================================================
+# load list of 8 select cty
+# cty in each of the 8 regions that has largest total demand for red meat in protein in 2050
+# in ref case ssp2
+ctyListRedMeat2050_dt <- readRDS(file = "procData_ctyListRedMeat2050_dt.Rda")
+ctyListRedMeat2050_dt <- as.list(ctyListRedMeat2050_dt)
+
+# report:
+# 1) beef demand, extract total demand and per person demand
+# 2) beef prices
+# 3) per person GDP 
+# 4) total population
+# 5) income elasticity of demand
+
+
+# LOAD BEEF DEMAND DATA=========================================================
+if(!exists("ldfCtyProj_dt")) {
+ldfCtyProj_dt <- readRDS("procData_ldfCtyProj_dt.Rda")
+}
+
+# keep 2020 and 2050 for 3 ref case ssp, 
+# & SSP2_rm100LAllCty, and SSP2_rm100LHiCty	
+
+setkey(ldfCtyProj_dt, year, scen, ldfUnit, ldf, cty)
+beefDema8Cty_dt <- ldfCtyProj_dt[CJ(
+  c("2020", "2050"),
+  c("SSP1_ref",
+    "SSP2_ref",
+    "SSP3_ref",
+    "SSP2_rm100LAllCty",
+    "SSP2_rm100LHiCty"),
+  "food",
+  "Beef",
+  ctyListRedMeat2050_dt[[1]]
+)]
+
+# keep relevant columns
+beefDema8Cty_dt <- 
+  beefDema8Cty_dt[, c("cty",
+                      "wbCtyIncClass",
+                      "year",
+                      "scen",
+                      "demaPerPersKg",
+                      "demaTot000Tons")]
+
+# LOAD PRICE DATA==========================================================
+
+prices_dt <- fread("rawData_prices_dt.csv")
+
+prices_dt$year <- as.character(prices_dt$year)
+
+# keep 2020 and 2050 for beef and 8 cty
+setkey(prices_dt, year, c, cty)
+beefPrice8Cty_dt <- prices_dt[CJ(
+  c("2020", "2050"),
+ "cbeef",
+ ctyListRedMeat2050_dt[[1]]
+)]
+
+# keep relevant columns
+beefPrice8Cty_dt <- 
+  beefPrice8Cty_dt[, c("cty", "year", "scen", "price")]
+
+# rename scenarios
+beefPrice8Cty_dt$scen
+beefPrice8Cty_dt[scen == "PCX_SSP1_ref_dt", scen := "SSP1_ref"]
+beefPrice8Cty_dt[scen == "PCX_SSP2_ref_dt", scen := "SSP2_ref"]
+beefPrice8Cty_dt[scen == "PCX_SSP3_ref_dt", scen := "SSP3_ref"]
+beefPrice8Cty_dt[scen == "PCX_SSP2_rm100LAllCty_dt", 
+                 scen := "SSP2_rm100LAllCty"]
+beefPrice8Cty_dt[scen == "PCX_SSP2_rm100LHiCty_dt", 
+                 scen := "SSP2_rm100LHiCty"]
+
+# merge price and demand
+beefDemaPrice8Cty_dt <- merge(beefDema8Cty_dt, 
+                              beefPrice8Cty_dt,
+                              by = c("cty", 
+                                     "year", 
+                                     "scen"))
+
+# LOAD POPULATION DATA==========================================================
+
+popCtyProj_dt <- fread("rawData_popCtyProj_dt.csv")
+popCtyProj_dt$year <- as.character(popCtyProj_dt$year)
+
+# keep 2020 and 2050 for 5 scenarios	
+setkey(popCtyProj_dt, year, scen, cty)
+pop8Cty_dt <- popCtyProj_dt[CJ(
+  c("2020", "2050"),
+  c("SSP1_ref",
+    "SSP2_ref",
+    "SSP3_ref",
+    "SSP2_rm100LAllCty",
+    "SSP2_rm100LHiCty"),
+  ctyListRedMeat2050_dt[[1]]
+
+)]
+
+# keep needed columns
+pop8Cty_dt <- pop8Cty_dt[, c("cty", "scen", "year", "pop000Peop")]
+
+
+# merge price, demand, and pop
+beefDemaPricePop8Cty_dt <- merge(beefDemaPrice8Cty_dt, pop8Cty_dt,
+                              by = c("cty", "scen", "year"))
+
+# LOAD INCOME DATA==============================================================
+# GDPX0(CTY, YRS) parameter is Final GDP (billion 2005 USD)
+
+income_dt <- fread("rawData_income_dt.csv")
+
+# change column names
+colnames(income_dt) <- c("scen", "cty", "year", "incTot")
+income_dt$year <- as.character(income_dt$year)
+
+income_dt[scen == "INC_SSP1_ref_dt", scen := "SSP1_ref"]
+income_dt[scen == "INC_SSP2_ref_dt", scen := "SSP2_ref"]
+income_dt[scen == "INC_SSP3_ref_dt", scen := "SSP3_ref"]
+income_dt[scen == "INC_SSP2_rm100LAllCty_dt", scen := "SSP2_rm100LAllCty"]
+income_dt[scen == "INC_SSP2_rm100LHiCty_dt", scen := "SSP2_rm100LHiCty"]
+income_dt[scen == "INC_SSP2_rm50LAllCty_dt", scen := "SSP2_rm50LAllCty"]
+income_dt[scen == "INC_SSP2_rm50LHiCty_dt", scen := "SSP2_rm50LHiCty"]
+
+saveRDS(income_dt, file = "procData_income_dt.Rda")
+
+# keep 2020 and 2050
+setkey(income_dt, year, cty, scen)
+inc8Cty_dt <- income_dt[CJ(
+  c("2020", "2050"),
+  ctyListRedMeat2050_dt[[1]],
+  c("SSP2_ref",
+    "SSP2_rm100LAllCty",
+    "SSP2_rm100LHiCty",
+    "SSP1_ref",
+    "SSP3_ref")
+)]
+
+# merge price, demand, pop, and total income
+beefDrivers8Cty_dt <- merge(beefDemaPricePop8Cty_dt, inc8Cty_dt,
+                                 by = c("scen", "cty", "year"))
+
+
+# per person income
+beefDrivers8Cty_dt[, incPerPers := (incTot * 1000 * 1000000)/
+                             (pop000Peop * 1000)]
+
+
+# INCOME AND POP DATA FIG/TAB====
+# add population and income into one file
+# compute 2020 and 2050 % change for each cty
+# and for the world, IQR
+# * data====
+
+{
+incPopCty_dt <- merge(income_dt, popCtyProj_dt,
+      by = c("scen", "cty", "year"),
+      all.x = TRUE)
+
+incPopCty_dt <- incPopCty_dt[year == "2020" | 
+                               year == "2050"]
+
+incPopCty_dt <-
+  incPopCty_dt[, c("scen",
+                   "wbCtyIncClass",
+                   "reg",
+                   "region",
+                   "cty",
+                   "year",
+                   "incTot",
+                   "pop000Peop")]
+
+incPopCty_dt <- incPopCty_dt[, perPersInc := (incTot * 1000 * 1000000)/
+               (pop000Peop * 1000)]
+
+# long to wide
+incPopCty_dt <- dcast(incPopCty_dt,
+                      scen + wbCtyIncClass + reg + region + cty ~ year,
+                      value.var = c("incTot", "perPersInc", "pop000Peop"))
+
+
+# * global value====
+
+incPopWld_dt <- 
+  incPopCty_dt[, .(incTot_2020 =  sum(incTot_2020),
+                   incTot_2050 =  sum(incTot_2050),
+                   pop000Peop_2020 =  sum(pop000Peop_2020),
+                   pop000Peop_2050 =  sum(pop000Peop_2050)),
+                 by = .(scen)]
+
+incPopWld_dt[ , perPersInc_2020 := (incTot_2020 * 1000 * 1000000)/
+               (pop000Peop_2020 * 1000) ]
+incPopWld_dt[ , perPersInc_2050 := (incTot_2050 * 1000 * 1000000)/
+               (pop000Peop_2050 * 1000) ]
+
+
+# number year for annual % change 
+nYrs <- 2050 - 2020
+
+incPopWld_dt[ , annPCPPInc := round(100 * ((perPersInc_2050 / perPersInc_2020) ^
+              (1 / nYrs)- 1), 2)]
+
+incPopWld_dt[ , annPCPop := round(100 * ((pop000Peop_2050 / pop000Peop_2020) ^
+                                           (1 / nYrs)- 1), 2)]
+
+incPopWld_dt <- incPopWld_dt[, c("scen", "annPCPPInc", "annPCPop")]
+
+# * cty range====
+
+incPopCty_dt[ , annPCPPInc := round(100 * ((perPersInc_2050 / perPersInc_2020) ^
+                                             (1 / nYrs)- 1), 2)]
+
+incPopCty_dt[ , annPCPop := round(100 * ((pop000Peop_2050 / pop000Peop_2020) ^
+                                           (1 / nYrs)- 1), 2)]
+
+incPopCtyRange_tab <- 
+  incPopCty_dt[, .(pPInc_min =  min(annPCPPInc),
+                   pPInc_max =  max(annPCPPInc),
+                   pPInc_iqr = round(IQR(annPCPPInc), 2),
+                   pop_min =  min(annPCPop),
+                   pop_max =  max(annPCPop),
+                   pop_iqr = round(IQR(annPCPop), 2)
+                   ),
+               by = .(scen)]
+
+incPopRange_tab <- merge(incPopWld_dt, incPopCtyRange_tab,
+                         by = "scen")
+
+# income global average, range, IQR
+incPopRange_tab$rangePPInc <- paste(incPopRange_tab$pPInc_min, 
+                               incPopRange_tab$pPInc_max, sep ="\226")
+incPopRange_tab$rangeIqrPPInc <- paste(incPopRange_tab$rangePPInc, 
+                               incPopRange_tab$pPInc_iqr, sep = ", ")
+incPopRange_tab$rangeIqrPPInc <- paste0("(", incPopRange_tab$rangeIqrPPInc,")")
+incPopRange_tab$pPInc <- paste(incPopRange_tab$annPCPPInc, 
+                               incPopRange_tab$rangeIqrPPInc, sep = " ")
+
+# pop global average, range, IQR
+incPopRange_tab$rangePop <- paste(incPopRange_tab$pop_min, 
+                                  incPopRange_tab$pop_max, sep ="\226")
+incPopRange_tab$rangeIqrPop <- paste(incPopRange_tab$rangePop, 
+                                     incPopRange_tab$pop_iqr, sep = ", ")
+incPopRange_tab$rangeIqrPop <- paste0("(", incPopRange_tab$rangeIqrPop,")")
+incPopRange_tab$pop <- paste(incPopRange_tab$annPCPop, 
+                                  incPopRange_tab$rangeIqrPop, sep = " ")
+
+incPopRange_tab <- incPopRange_tab[,c("scen", "pPInc", "pop") ]
+
+
+# scenarios as ordered factor for scenario table
+incPopRange_tab$scen <-
+  factor(
+    incPopRange_tab$scen,
+    ordered = TRUE,
+    levels = c("SSP1_ref",
+               "SSP2_ref",
+               "SSP3_ref",
+               "SSP2_rm50LAllCty",
+               "SSP2_rm100LAllCty",
+               "SSP2_rm50LHiCty",
+               "SSP2_rm100LHiCty"
+    )
+  )
+
+incPopRange_tab <- setorder(incPopRange_tab, scen)
+
+}
+
+# save globe-cty
+fwrite(incPopRange_tab, "output_table1_incPopRange.csv",
+       row.names = FALSE)
+
+# * reg value====
+
+incPopReg_dt <- 
+  incPopCty_dt[, .(incTot_2020 =  sum(incTot_2020),
+                   incTot_2050 =  sum(incTot_2050),
+                   pop000Peop_2020 =  sum(pop000Peop_2020),
+                   pop000Peop_2050 =  sum(pop000Peop_2050)),
+               by = .(scen, reg, region)]
+
+incPopReg_dt[ , perPersInc_2020 := (incTot_2020 * 1000 * 1000000)/
+                (pop000Peop_2020 * 1000) ]
+incPopReg_dt[ , perPersInc_2050 := (incTot_2050 * 1000 * 1000000)/
+                (pop000Peop_2050 * 1000) ]
+
+incPopReg_dt[ , annPCPPInc := round(100 * ((perPersInc_2050 / perPersInc_2020) ^
+                                             (1 / nYrs) - 1), 2)]
+
+incPopReg_dt[ , annPCPop := round(100 * ((pop000Peop_2050 / pop000Peop_2020) ^
+                                           (1 / nYrs) - 1), 2)]
+
+incPopReg_dt <- incPopReg_dt[, c("scen", "reg", "region", "annPCPPInc", "annPCPop")]
+
+incPopRegRange_tab <- 
+  incPopCty_dt[, .(pPInc_min =  min(annPCPPInc),
+                   pPInc_max =  max(annPCPPInc),
+                   pPInc_iqr = round(IQR(annPCPPInc), 2),
+                   pop_min =  min(annPCPop),
+                   pop_max =  max(annPCPop),
+                   pop_iqr = round(IQR(annPCPop), 2)
+  ),
+  by = .(scen, reg)]
+
+
+incPopRegRange_tab <- merge(incPopReg_dt, incPopRegRange_tab,
+                         by = c("scen", "reg"))
+
+# income reg average, range, IQR
+incPopRegRange_tab$rangeInc <- paste(incPopRegRange_tab$pPInc_min, 
+                                  incPopRegRange_tab$pPInc_max, sep ="\226")
+incPopRegRange_tab$rangeIqrInc <- paste(incPopRegRange_tab$rangeInc, 
+                                     incPopRegRange_tab$pPInc_iqr, sep = ", ")
+incPopRegRange_tab$rangeIqrInc <- paste0("(", incPopRegRange_tab$rangeIqrInc,")")
+incPopRegRange_tab$valueInc <- paste(incPopRegRange_tab$annPCPPInc, 
+                                  incPopRegRange_tab$rangeIqrInc, sep = " ")
+
+# pop reg average, range, IQR
+incPopRegRange_tab$rangePop <- paste(incPopRegRange_tab$pop_min, 
+                                  incPopRegRange_tab$pop_max, sep ="\226")
+incPopRegRange_tab$rangeIqrPop <- paste(incPopRegRange_tab$rangePop, 
+                                     incPopRegRange_tab$pop_iqr, sep = ", ")
+incPopRegRange_tab$rangeIqrPop <- paste0("(", incPopRegRange_tab$rangeIqrPop,")")
+incPopRegRange_tab$valuePop <- paste(incPopRegRange_tab$annPCPop, 
+                                  incPopRegRange_tab$rangeIqrPop, sep = " ")
+
+incPopRegRange_tab <- incPopRegRange_tab[,c("scen", "reg", "region", "valueInc", "valuePop") ]
+
+setkey(incPopRegRange_tab, scen)
+incPopRegRange_tab <- incPopRegRange_tab[c("SSP2_ref",
+               "SSP1_ref",
+               "SSP3_ref")]
+
+# scenarios as ordered factor for scenario table
+incPopRegRange_tab$scen <-
+  factor(
+    incPopRegRange_tab$scen,
+    ordered = TRUE,
+    levels = c("SSP1_ref",
+               "SSP2_ref",
+               "SSP3_ref"
+    )
+  )
+
+incPopRegRange_tab <- setorder(incPopRegRange_tab, reg, scen)
+incPopRegRange_tab
+
+
+# income group value====
+
+setkey(incPopCty_dt, scen)
+incPopCtyIncGrp_dt <- incPopCty_dt[c("SSP1_ref",
+                                     "SSP2_ref",
+                                     "SSP3_ref")]
+
+# sum income and pop all cty by inc Grp
+incPopCtyIncGrp_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "LMIC"]
+incPopCtyIncGrp_dt[wbCtyIncClass == "High income", wbCtyIncClass := "HIC"]
+
+incPopIncGrp_dt <- 
+  incPopCtyIncGrp_dt[, .(incTot_2020 =  sum(incTot_2020),
+                   incTot_2050 =  sum(incTot_2050),
+                   pop000Peop_2020 =  sum(pop000Peop_2020),
+                   pop000Peop_2050 =  sum(pop000Peop_2050)),
+               by = .(scen, wbCtyIncClass)]
+
+# per person income 
+incPopIncGrp_dt[, incPerPers_2020 := (incTot_2020 * 1000 * 1000000)/
+                     (pop000Peop_2020 * 1000)]
+incPopIncGrp_dt[, incPerPers_2050 := (incTot_2050 * 1000 * 1000000)/
+                  (pop000Peop_2050 * 1000)]
+
+
+incPopIncGrp_dt <- melt(incPopIncGrp_dt,
+                        id.vars = c("scen", "wbCtyIncClass"))
+
+
+incPopIncGrp_dt <- dcast(incPopIncGrp_dt,
+                      scen + variable ~ wbCtyIncClass)
+incPopIncGrp_dt[, percLMIC := round(100 * LMIC / (HIC + LMIC), 0)]
+incPopIncGrp_dt[, percHICPerc := round(100 * HIC / (HIC + LMIC), 0)]
+
+# plot income and pop growth====
+
+# plot
+incPopCty_dt
+setkey(incPopCty_dt, scen)
+incPopCtySSP_dt <- incPopCty_dt[ c("SSP1_ref",
+                                    "SSP2_ref",
+                                    "SSP3_ref")]
+
+# add ssp col
+incPopCtySSP_dt$ssp <- substr(incPopCtySSP_dt$scen, 
+                               start = 1,
+                               stop = 4)
+
+incPopCtySSP_dt[ , annPCInc := round(100 * ((incTot_2050 / incTot_2020) ^
+                                              (1 / nYrs)- 1), 2)]
+
+# keep columns
+incPopCtySSP_dt <-
+  incPopCtySSP_dt[, c(
+    "ssp",
+    "reg",
+    "region",
+    "cty",
+    "annPCPop",
+    "annPCPPInc",
+    "annPCInc"
+  )]
+
+# wide to long
+incPopCtySSP_dt <- melt(
+  incPopCtySSP_dt,
+  id.vars = c("ssp",
+              "reg",
+              "region",
+              "cty"))
+
+incPopCtySSP_dt[variable == "annPCPop", variable := "Population"]
+incPopCtySSP_dt[variable == "annPCInc", variable := "Total income"]
+incPopCtySSP_dt[variable == "annPCPPInc", variable := "Per person income"]
+
+incPopCtySSP_dt$variable <-
+  factor(
+    incPopCtySSP_dt$variable,
+    ordered = TRUE,
+    levels = c(
+      "Population",
+      "Total income",
+      "Per person income"))
+      
+      
+
+
+# plot====
+
+# * common color for ssps====
+# http://colorbrewer2.org/#type=sequential&scheme=BuGn&n=3
+brewColorSsp <- brewer.pal(11, name = 'BrBG')
+sspColor <- c(brewColorSsp[[8]], # SSP1
+              brewColorSsp[[6]], # SSP2
+              brewColorSsp[[3]]) # SSP3
+
+{
+sspPopInc_plot <- ggplot(data = incPopCtySSP_dt,
+                      aes(x = variable,
+                          y = value,
+                          fill = ssp)) + 
+  geom_boxplot(outlier.shape = NA, 
+               position = position_dodge(width = 0.7),
+               color = "black",
+               size = 0.3) + 
+  facet_wrap(~ region, nrow = 2) +
+  labs(x     = "",
+       y     = "Annual percent change (2020 to 2050)") +
+  theme_bw() +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1)) + 
+  scale_x_discrete(labels = wrap_format(15)) +
+  theme(
+    legend.key.size = unit(1, "cm"),
+    legend.position = "bottom",
+    legend.margin = margin(t = -0.9, 
+                           r = 0, 
+                           b = -1, 
+                           l = 0, unit = "cm"),
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "cm")
+  ) +
+  scale_fill_manual("Shared socioeconomic pathway (SSP)", 
+                    labels = c("SSP1",
+                               "SSP2",
+                               "SSP3"),
+                    values = sspColor)
+
+# save plot
+ggsave(
+  file = "output_figSI4_popInc.tiff",
+  sspPopInc_plot,
+  width  = 9,
+  height = 6,
+  compression = "lzw"
+)
+
+}
+```
+
+
+
+```{r computing income elasticity of demand, include=FALSE}
+# Description: compute income elasticities of demand using hist and proj data
+# compare to exogenous trend, plot all
+
+
+# LOAD DATA=====================================================================
+
+# one cty per region based on largest total demand for red meat (in protein)
+ctyListRedMeat2050_dt <- readRDS(file = "procData_ctyListRedMeat2050_dt.Rda")
+
+# load historical ldf demand
+if(!exists("ldfCtyHist_dt")) {
+ldfCtyHist_dt <- readRDS(file = "procData_ldfCtyHist_dt.Rda")
+}
+
+
+# keep food demand
+setkey(ldfCtyHist_dt, ldfUnit)
+ldfFoodCtyHist_dt <- ldfCtyHist_dt["food"]
+
+names(ldfFoodCtyHist_dt)[names(ldfFoodCtyHist_dt) == "cty"] <- "isoCty"
+names(ldfFoodCtyHist_dt)[names(ldfFoodCtyHist_dt) == "country"] <- "faoCountry"
+
+
+# keep columns needed to calculate elasticity
+ldfFoodCtyHist_dt <- ldfFoodCtyHist_dt[, c("isoCty", "faoCountry", "year", "ldf", "demaPerPersKg")]
+
+
+# historical GDP================================================================
+gdpCtyHist_dt <- fread("rawData_FAOSTAT_data_2-12-2020.csv")
+
+
+# data is total GDP in million US $ 2005 prices
+# keep relevant columns
+gdpCtyHist_dt <- gdpCtyHist_dt[, c("Area Code",
+                                         "Area",
+                                         "Year",
+                                         "Value")]
+
+# rename columns
+colnames(gdpCtyHist_dt) <- c("isoCty",
+                                "faoCountry",
+                                "year",
+                                "value")
+
+# year as numeric 
+gdpCtyHist_dt$year <- as.character(gdpCtyHist_dt$year)
+
+
+# rename as GDP
+names(gdpCtyHist_dt)[names(gdpCtyHist_dt) == "value"] <- "gdpTotMill"
+
+# merge with population
+popCtyHist_dt <- readRDS(file = "procData_popCtyHist_dt.Rda")
+
+gdpCtyHist_dt <- merge(gdpCtyHist_dt, popCtyHist_dt,
+      by = c("year", "isoCty", "faoCountry"))
+
+
+# gdp per person
+gdpCtyHist_dt[, gdpPerPers := (gdpTotMill * 1000000)/
+                (pop000Peop * 1000)]
+
+
+# keep columns needed to calculate elasticity
+gdpCtyHist_dt <- gdpCtyHist_dt[, c("isoCty", "faoCountry", "year", "gdpPerPers")]
+
+
+# MERGE GDP WITH LDF DEMAND=====================================================
+gdpAsfCty_dt <- merge(gdpCtyHist_dt, ldfFoodCtyHist_dt,
+      by = c("isoCty", "faoCountry", "year"),
+      all = FALSE)
+
+gdpAsfCty_dt$dataType <- "Historical"
+
+# CALC ELASTICITY===============================================================
+# compute the point elasticity
+# so know the elasticity each year
+# elasticity = (delta Q / delta income) * (income / Q )
+
+gdpAsfCty_dt <- data.table(
+  gdpAsfCty_dt %>%
+  group_by(isoCty, faoCountry, ldf, dataType) %>%
+  mutate(
+    incElas = ((demaPerPersKg - lag(demaPerPersKg, 1)) /
+               (gdpPerPers - lag(gdpPerPers, 1))) * 
+      (gdpPerPers / demaPerPersKg)
+  )
+)
+
+# remove missing data
+gdpAsfCty_dt <- gdpAsfCty_dt[complete.cases(gdpAsfCty_dt), ]
+
+# keep needed columns
+gdpAsfCty_dt <- gdpAsfCty_dt[, c("isoCty", "year", "ldf", "dataType", "incElas")]
+
+names(gdpAsfCty_dt)[names(gdpAsfCty_dt) == "isoCty"] <- "cty"
+
+
+# order data by cty, ldf, year
+gdpAsfCty_dt <- setorder(gdpAsfCty_dt, cty, ldf)
+
+# IMPACT MODEL ELASTICITY=======================================================
+# load exogenous trend used in model in reference case
+
+#incElas_dt <- readRDS(file = "procData_incElas_dt.Rda")
+incElas_dt <-fread("rawData_incEScen_dt.csv")
+
+incElas_dt$year <- as.numeric(as.character(incElas_dt$year))
+
+# keep ldf
+incElas_dt <- incElas_dt[c == "cbeef" |
+                                  c == "ceggs" |
+                                  c == "clamb"  |
+                                  c == "cmilk"  |
+                                  c == "cpork"  |
+                                  c == "cpoul", ]
+
+# harmonize names
+incElas_dt[c == "cbeef", c := 'Beef']
+incElas_dt[c == "ceggs", c := 'Eggs']
+incElas_dt[c == "clamb", c := 'Sheep']
+incElas_dt[c == "cmilk", c := 'Milk']
+incElas_dt[c == "cpork", c := 'Pork']
+incElas_dt[c == "cpoul", c := 'Poultry']
+
+names(incElas_dt)[names(incElas_dt) == "c"] <- "ldf"
+incElas_dt$dataType <- "Exogenous trend"
+
+# bind hist and proj
+incElas_dt <- rbind(incElas_dt, gdpAsfCty_dt)
+
+# keep for 8 cty
+
+# check names of cty are the same for proj and hist
+incElas_dt[cty == "CHN", cty := 'CHM']
+incElas_dt[cty == "FRA", cty := 'FRP']
+
+
+
+# merge
+incElas8Cty_dt <- merge(ctyListRedMeat2050_dt, incElas_dt,
+                        by = "cty")
+
+# keep needed cols
+incElas8Cty_dt <- incElas8Cty_dt[, c("cty", "ldf", 
+                                     "year", "dataType", 
+                                     "incElas")]
+
+# rename cty so use full country name
+incElas8Cty_dt[cty == "BRA", country := "Brazil"]
+incElas8Cty_dt[cty == "CHM", country := "China"]
+incElas8Cty_dt[cty == "EGY", country := "Egypt"]
+incElas8Cty_dt[cty == "DEU", country := "Germany"]
+incElas8Cty_dt[cty == "IND", country := "India"]
+incElas8Cty_dt[cty == "NGA", country := "Nigeria"]
+incElas8Cty_dt[cty == "RUS", country := "Russia"]
+incElas8Cty_dt[cty == "USA", country := "USA"]
+
+# cty as ordered  factor to match region order
+incElas8Cty_dt$country <-
+  factor(
+    incElas8Cty_dt$country,
+    ordered = TRUE,
+    levels = c("China",
+               "Germany",
+               "Russia",
+               "Brazil",
+               "Egypt",
+               "USA",
+               "India",
+               "Nigeria"
+    )
+  )
+
+# data type as ordered factor
+incElas8Cty_dt$dataType <-
+  factor(
+    incElas8Cty_dt$dataType,
+    ordered = TRUE,
+    levels = c(
+      "Historical",
+      "Exogenous trend"                   
+    )
+  )
+
+# * ldf as ordered factor====
+incElas8Cty_dt$ldf <-
+  factor(
+    incElas8Cty_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "Poultry",
+      "Eggs",
+      "Milk"
+    )
+  )
+
+incElas8Cty_dt <- setorder(incElas8Cty_dt, cty, ldf, dataType, year)
+
+
+# PLOT DATA=====================================================================
+
+# * plot options====
+# shape list
+# common region marker shape
+regShape <- c(15, 16, 17,
+              18, 6, 4,
+              5, 0)
+
+# common region color
+# http://colorbrewer2.org/#type=sequential&scheme=BuGn&n=3
+brewColor <- brewer.pal(8, name = 'Set1')
+regColor <- c(brewColor[[1]], 
+              brewColor[[2]],
+              brewColor[[3]],
+              brewColor[[4]], 
+              brewColor[[5]],
+              "#000000",
+              brewColor[[7]], 
+              brewColor[[8]])
+
+# plot options
+theme_opts <- list(
+  theme(
+    strip.text = element_text(size = 16),
+    strip.background = element_rect(fill = "white"),
+    legend.text  = element_text(size = 12),
+    legend.title = element_text(size = 16),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 16,
+                               angle = 90),
+    axis.text.y = element_text(size = 16),
+    axis.title = element_text(size = 16),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "lines")
+    
+  )
+)
+
+# list of years to report, take every 5th one
+fifthYr <- c(
+  "2020", "2025",
+  "2030", "2035",
+  "2040", "2045",
+  "2050")
+
+
+# * plot trend in future=========================================================
+# * income elasticity over time for each cty and each ldf using impact ref values
+
+# set key to filter item so only plot food demand for every 5th year
+setkey(incElas8Cty_dt, year)
+
+# generate plot
+incEProjTrendPlot <-
+  ggplot(incElas8Cty_dt[.(fifthYr)], 
+         aes(y = incElas,
+             x = as.numeric(year),
+             shape = country, 
+             color = country)) +
+  geom_point(size = 2, stroke = 1.5) +
+  geom_line() + 
+  facet_wrap(~ ldf, 
+             nrow = 2) +
+  theme_bw() + theme_opts +
+  labs(shape = "Country",
+       color = "Country",
+       x = "Year",
+       y = "Income elasticity of demand") + 
+  scale_shape_manual(values = regShape) +
+  scale_color_manual(values = regColor) +
+  guides(shape = guide_legend(nrow = 1,
+                              override.aes = list(size = 6)),
+         color = guide_legend(override.aes = list(linetype = 0)))
+
+
+# # save plot
+# ggsave(
+#   file = "unrepFig_incElas8Cty.tiff",
+#   width = 12,
+#   height = 9,
+#   incEProjTrendPlot,
+#   compression = "lzw"
+# )
+
+# * plot historical and future elasticities====
+# only plot very fifth year for trend
+incElas8Cty_dt <-
+  incElas8Cty_dt[(incElas8Cty_dt$dataType == "Historical") | 
+                   (incElas8Cty_dt$dataType == "Exogenous trend" &
+                      incElas8Cty_dt$year ==  "2020" | 
+                      incElas8Cty_dt$year ==  "2025" |
+                      incElas8Cty_dt$year ==  "2030" |
+                      incElas8Cty_dt$year ==  "2035" |
+                      incElas8Cty_dt$year ==  "2040" |
+                      incElas8Cty_dt$year ==  "2045" |
+                      incElas8Cty_dt$year ==  "2050" 
+                      ), ]
+
+incElas8Cty_dt[dataType =="Exogenous trend", dataTypeL := "Reference case elasticities"]
+incElas8Cty_dt[dataType =="Historical", dataTypeL := "Estimated"]
+
+
+# plot limits for y axis
+incElastYMin <- -10
+incElastYMax <-  10
+
+
+{
+# plot
+incEProjHistBW_plot <-
+  ggplot(incElas8Cty_dt,
+         aes(
+           y = incElas,
+           x = as.numeric(year),
+           shape = dataTypeL)) +
+  geom_point(size = 0.3) +
+  geom_smooth(data =  subset(incElas8Cty_dt, 
+                             dataTypeL == "Estimated"),
+               method = 'lm',
+               formula = y ~ x,
+               aes(color = " "),
+               lwd = 0.5) +  
+  facet_wrap(country ~  ldf,
+             nrow = 4) +
+  theme_bw() +   theme(
+    strip.text.x = element_text(size = 6,
+                                margin = margin(0.05, 0, 0.05, 0, "cm")),
+    strip.background = element_rect(fill = "white"),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 5, angle = 90, vjust = 0),
+    axis.text.y = element_text(size = 5),
+    axis.title = element_text(size = 12),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "cm")) +
+  ylim(incElastYMin, incElastYMax) +
+  scale_shape_manual(values = c(16, 2)) +
+  scale_color_manual(name = " Linear regression",
+                     values = c(
+                       " " = "black")) +
+  labs(shape = "Data type",
+       color = "Data type",
+       x = "Year",
+       y = "Income elasticity of demand"
+  ) +
+  guides(shape = guide_legend(nrow = 1,
+                              override.aes = list(size = 4)),
+         color = guide_legend(override.aes = list(linetype = 1, 
+                                                  fill = NA))) +
+  theme(legend.margin = margin(t = -0.2, 
+                               r = 0, 
+                               b = -0.1, 
+                               l = 0, unit = "cm"),
+        legend.key.height = unit(0, "cm"))
+  
+}
+
+
+{ 
+  incEProjHistCo_plot <-
+  ggplot(incElas8Cty_dt,
+         aes(
+           y = incElas,
+           x = as.numeric(year),
+           shape = dataTypeL,
+           color = dataTypeL)) +
+  geom_point(size = 0.3) +
+    geom_smooth(data =  subset(incElas8Cty_dt,
+                            dataTypeL == "Estimated"),
+                fill = "#abd9e9",
+               method = 'lm',
+              formula = y ~ x,
+               lwd = 0.5) +
+  facet_wrap(country ~  ldf,
+             nrow = 4) +
+  theme_bw() +
+    ylim(incElastYMin, incElastYMax) +
+    labs(shape = "Data type",
+         color = "Data type",
+         x = "Year",
+         y = "Income elasticity of demand"
+    ) +
+    theme(
+    strip.text.x = element_text(size = 6,
+                                margin = margin(0.05, 0, 0.05, 0, "cm")),
+    strip.background = element_rect(fill = "white"),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 5, angle = 90, vjust = 0),
+    axis.text.y = element_text(size = 5),
+    axis.title = element_text(size = 12),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "cm")) +
+    scale_shape_manual(values = c(16, 2)) +
+    scale_color_manual(values = c("#2c7bb6", "#fdae61")) +
+    guides(shape = guide_legend(nrow = 1,
+                                override.aes = list(size = 4)),
+           color = guide_legend(override.aes = list(linetype = 0,
+                                                    fill = NA))) +
+    theme(legend.margin = margin(t = -0.2,
+                                 r = 0,
+                                 b = -0.1,
+                                 l = 0, unit = "cm"),
+          legend.key.height = unit(0, "cm"))
+}
+
+# save plot
+ggsave(
+  file = "output_figSI1_incElas8Cty.tiff",
+  width = 10,
+  height = 5,
+  incEProjHistCo_plot,
+  compression = "lzw"
+)
+
+
+# * income elasticity table=====================================================
+{
+# data
+impCtyReg_dt <- readRDS(file = "procData_impCtyReg_dt.Rda")
+
+incElasCtyReg_dt <- merge(incElas_dt, impCtyReg_dt,
+      by = "cty")
+
+
+# ldf as ordered factor
+incElasCtyReg_dt$ldf <-
+  factor(
+    incElasCtyReg_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "Poultry",
+      "Eggs",
+      "Milk"
+    )
+  )
+
+
+# average elasticity by LDF for world
+tapply(incElasCtyReg_dt$incElas, incElasCtyReg_dt$ldf, mean)
+
+# * plot elasticity by reg/ldf/time====
+
+setkey(incElasCtyReg_dt, dataType , year)
+incElasCtyReg3Yr_dt <- incElasCtyReg_dt[CJ("Exogenous trend",
+                                        c("2020", "2035", "2050"))]
+
+# income elasticity by reg-ldf-year plot
+incElasRegAsfYr_plot <- ggplot(data = incElasCtyReg3Yr_dt,
+                      aes(x = ldf,
+                          y = incElas,
+                          fill = year)) + 
+  geom_boxplot(outlier.shape = NA, 
+               position = position_dodge(width = 0.7),
+               color = "black",
+               size = 0.3) + 
+  facet_wrap(~ region, nrow = 2) +
+  labs(fill = "Year",
+       x     = "Livestock-derived food",
+       y     = "Income elasticity of demand") +
+  theme_bw() +
+  theme_opts + 
+  theme(strip.text = element_text(size = 10),
+        axis.text  = element_text(size = 10),
+        axis.title = element_text(size = 12)) + 
+  scale_fill_brewer(palette = "Greys")
+
+
+# save plot
+ggsave(
+  file = "output_fig1_incElasReg.tiff",
+  incElasRegAsfYr_plot,
+  width  = 9,
+  height = 6,
+  compression = "lzw"
+)
+
+# income elasticity by WB-ldf-year plot
+# high income vs not high income column
+incElasCtyReg3Yr_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "Low- and middle-income countries"]
+incElasCtyReg3Yr_dt[(wbCtyIncClass == "High income"), wbCtyIncClass := "High-income countries"]
+
+incElasWBAsfYr_plot <- ggplot(data = incElasCtyReg3Yr_dt,
+                               aes(x = ldf,
+                                   y = incElas,
+                                   fill = year)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  facet_wrap(~ wbCtyIncClass) +
+  labs(fill = "Year",
+       x     = "Livestock-derived food",
+       y     = "Income elasticity of demand") +
+  theme_bw() +
+  theme_opts + 
+  theme(strip.text = element_text(size = 10),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12)) + 
+scale_fill_brewer(palette = "Greys")
+
+
+# save plot
+ggsave(
+  file = "output_figSI2_incElastIncGrp.tiff",
+  incElasWBAsfYr_plot,
+  width  = 9,
+  height = 6,
+  compression = "lzw"
+)
+
+# table by reg
+incElastReg_Tab <- incElasCtyReg3Yr_dt[,
+                                  .(N = .N,
+                                    mean = round(mean(incElas), 2),
+                                    min = round(min(incElas), 2),
+                                    max = round(max(incElas), 2)),
+                                  by = .(ldf, year, reg)]
+
+names(incElastReg_Tab)[names(incElastReg_Tab) == "reg"] <- "location"
+incElastReg_Tab$dataType <- "reg"
+
+# table by World Bank income group
+incElastIncGroup_Tab <- incElasCtyReg3Yr_dt[,
+                                 .(N = .N,
+                                   mean = round(mean(incElas), 2),
+                                   min = round(min(incElas), 2),
+                                   max = round(max(incElas), 2)),
+                                 by = .(ldf, year, wbCtyIncClass)]
+
+names(incElastIncGroup_Tab)[names(incElastIncGroup_Tab) == "wbCtyIncClass"] <- "location"
+incElastIncGroup_Tab$dataType <- "incGroup"
+
+# bind income and reg groups
+incElast_Tab <- rbind(incElastIncGroup_Tab, incElastReg_Tab)
+
+
+# range
+incElast_Tab$range <- paste(incElast_Tab$min, incElast_Tab$max, sep ="\226")
+
+incElast_Tab$range <- paste0("(", incElast_Tab$range,")")
+
+incElast_Tab$value <- paste(incElast_Tab$mean, incElast_Tab$range, sep = " ")
+
+incElast_Tab <- incElast_Tab[, c("ldf", "year", "location", "dataType", "value")]
+
+# long to wide
+
+incElast_Tab <- dcast(incElast_Tab,
+                      location + dataType + year ~ ldf,
+                      value.var = "value"
+                      )
+
+
+# save income elasticity range
+setkey(incElast_Tab, dataType)
+
+# # by region
+# fwrite(incElast_Tab["reg"],
+#        "unrepTable_incElastReg.csv",
+#        row.names = FALSE)
+
+
+# by WB income group
+incElastIncGroupTable_Tab <- incElast_Tab["incGroup"]
+
+unique(incElastIncGroupTable_Tab$location)
+
+# income group as ordered factor
+incElastIncGroupTable_Tab$location <-
+  factor(
+    incElastIncGroupTable_Tab$location,
+    ordered = TRUE,
+    levels = c(
+      "Low- and middle-income countries",
+      "High-income countries"
+    )
+  )
+
+incElastIncGroupTable_Tab <- setorder(incElastIncGroupTable_Tab, location)
+incElastIncGroupTable_Tab$dataType <- NULL
+
+# fwrite(incElastIncGroupTable_Tab,
+#        "unrepTable_incElastIncGrp.csv",
+#        row.names = FALSE)
+
+# countries per grouping
+impCtyReg_dt[,.N,by = wbCtyIncClass]
+
+}
+
+# * plot all cty elasticity by ldf-reg====
+# plot all countries by reg-ldf
+
+{
+setkey(incElasCtyReg_dt, year, dataType)
+
+  
+incElasCtyReg_dt$cty
+ctyIncEProjTrendAsfReg_plot <-
+  ggplot(incElasCtyReg_dt[CJ((fifthYr),
+                              ("Exogenous trend"))], 
+         aes(y = incElas,
+             x = as.numeric(year),
+             shape = region, 
+             color = region)) +
+  geom_point(size = 0.5) +
+  facet_wrap(~ ldf, 
+             nrow = 2) +
+  theme_bw() + theme_opts +
+  labs(shape = "Region",
+       color = "Region",
+       x = "Year",
+       y = "Income elasticity of demand") + 
+  scale_shape_manual(values = regShape) +
+  scale_color_manual(values = regColor) +
+  guides(shape = guide_legend(nrow = 1,
+                              override.aes = list(size = 6)),
+         color = guide_legend(override.aes = list(linetype = 0)))
+
+# # save plot
+# ggsave(
+#   file = "unrepFig_incEProjTrendCty.tiff",
+#   width = 12,
+#   height = 9,
+#   ctyIncEProjTrendAsfReg_plot,
+#   compression = "lzw"
+# )
+
+}
+
+```
+
+
+
+```{r generating tables for price elasticity of demand, include=FALSE}
+# Description: generate table of price elasticties of demand for each ldf by cty
+
+
+# LOAD & ORG DATA===============================================================
+# load all price elasticities, they are the same in all scenarios
+priceElas_dt <- fread("rawData_priceElas_dt.csv")
+
+
+# elasticity to 2 dp
+priceElas_dt$FDELASH <- round(priceElas_dt$FDELASH, 2)
+
+
+# keep 'urban' and ldf commodities
+# keep when C and CC both the same as this is the own-price elasticity
+priceElas_dt <- priceElas_dt[(H == "Urban") &
+                             (C == "cbeef" & CC == "cbeef" |
+                              C == "ceggs" & CC == "ceggs" |
+                              C == "clamb" & CC == "clamb" |
+                              C == "cmilk" & CC == "cmilk" |
+                              C == "cpork" & CC == "cpork" |
+                              C == "cpoul" & CC == "cpoul"), ]
+# keep columns and rename
+priceElas_dt <- priceElas_dt[, c('C', 'CTY', 'FDELASH')]
+colnames(priceElas_dt) <- c('c', 'cty', 'priceElas')
+
+
+# add LDF NAMES
+# rename ldf to match IMPACT names
+priceElas_dt[c == "cbeef", ldf := 'Beef']
+priceElas_dt[c == "ceggs", ldf := 'Eggs']
+priceElas_dt[c == "clamb", ldf := 'Sheep']
+priceElas_dt[c == "cmilk", ldf := 'Milk']
+priceElas_dt[c == "cpork", ldf := 'Pork']
+priceElas_dt[c == "cpoul", ldf := 'Poultry']
+
+
+# ldf as ordered factor 
+priceElas_dt$ldf <-
+  factor(
+    priceElas_dt$ldf,
+    ordered = TRUE,
+    levels = c(
+      "Beef",
+      "Sheep",
+      "Pork",
+      "Poultry",
+      "Eggs",
+      "Milk"
+    )
+  )
+
+priceElas_dt
+
+# add region
+impCtyReg_dt <- readRDS(file = "procData_impCtyReg_dt.Rda")
+
+# merge
+priceElas_dt <- merge(priceElas_dt, impCtyReg_dt,
+                      by = "cty",
+                      all.x = TRUE)
+
+# PLOT====
+
+priceElas_plot <- ggplot(data = priceElas_dt,
+                      aes(x = ldf,
+                          y = priceElas)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  facet_wrap(~ region, nrow = 2) +
+  labs(x     = "Livestock-derived food",
+       y     = "Price elasticity of demand") +
+  theme_bw() +
+  theme(
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 10, angle = 90),
+    axis.text.y = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "cm"))
+
+
+# save pop plot
+ggsave(
+  file = "output_figSI3_priceElasReg.tiff",
+  priceElas_plot,
+  width  = 9,
+  height = 6,
+  compression = "lzw"
+)
+
+```
+
+
+
+```{r globe v no-globe, include=FALSE}
+# Description: globe vs. no globe. gdp and demand
+# GLOBE is a SAM-based global CGE model 
+
+
+# INCOME PRE VS POST GLOBE============================
+
+# do for each ssp with ref elasticities and 
+# for 100% all cty income elasticity scenario
+
+incGlobe_dt <- fread("rawData_incGlobe_dt.csv")
+
+# change column names 
+colnames(incGlobe_dt) <- c("scen", "cty", "year", "incTot")
+
+# add ssp col
+incGlobe_dt$ssp <- substr(incGlobe_dt$scen, start = 5, stop = 8)
+
+
+# add population
+#popCtyProj_dt <- readRDS(file = "procData_popCtyProj_dt.Rda")
+popCtyProj_dt <- fread("rawData_popCtyProj_dt.csv")
+
+setkey(popCtyProj_dt,scen)
+popCtyProj_dt <- popCtyProj_dt[ c("SSP1_ref","SSP2_ref", "SSP3_ref")]
+
+# add ssp col
+popCtyProj_dt$ssp <- substr(popCtyProj_dt$scen, start = 1, stop = 4)
+popCtyProj_dt$scen <- NULL
+popCtyProj_dt$wbCtyIncClass <- NULL
+
+
+incGlobe_dt <- merge(incGlobe_dt, popCtyProj_dt,
+      by = c("ssp", "cty", "year"))
+
+# add scen-globe
+incGlobe_dt$scenGlobe <- substr(incGlobe_dt$scen, 10, 
+                                   nchar(incGlobe_dt$scen) - 3)
+
+incGlobe_dt$incElas <- sub("_.*", "", incGlobe_dt$scenGlobe)
+incGlobe_dt$globe <- sub(".*_", "", incGlobe_dt$scenGlobe)
+
+incGlobe_dt[globe == "pre", globe := "GLOBE-adjusted income"]
+incGlobe_dt[globe == "pos", globe := "Not GLOBE-adjusted income"]
+
+incGlobe_dt$scenGlobe <- as.factor(incGlobe_dt$scenGlobe)
+levels(incGlobe_dt$scenGlobe) <- 
+  c("GLOBE-adjusted income & reference case elasticities",
+    "Not GLOBE-adjusted income & reference case elasticities",
+    "GLOBE-adjusted income & 100% lower red meat elasticities",
+    "Not GLOBE-adjusted income & 100% lower red meat elasticities")
+
+
+# add WB income groups
+impCtyReg_dt <- readRDS(file = "procData_impCtyReg_dt.Rda")
+
+
+incGlobe_dt <- merge(incGlobe_dt, impCtyReg_dt,
+      by = c("cty", "region", "reg", "impCountry"))
+
+
+# high income vs. not high income column
+incGlobe_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "All low- & middle income countires"]
+incGlobe_dt[(wbCtyIncClass == "High income"), wbCtyIncClass := "All high-income countries"]
+
+
+# subset data
+incGlobe_dt <- incGlobe_dt[year==2050]
+
+
+# total by income group
+incGlobeIncGrp_dt <- incGlobe_dt[, .(
+  incTot =  sum(incTot),
+  pop000Peop =  sum(pop000Peop)),
+  by = .(ssp, incElas, globe, scenGlobe, region)]
+
+incGlobeIncGrp_dt[, incPerPers := (incTot * 1000 * 1000000)/
+                    (pop000Peop * 1000)]
+
+# PLOT INCOME===================================================================
+# plot income in 2050 facet ssp-incE, with/without
+
+# * plot options====
+theme_opts <- list(
+  theme(legend.position = "bottom",
+        legend.text  = element_text(size = 12),
+        legend.title = element_text(size = 16),
+        strip.background = element_rect(fill = "white"),
+        strip.text.x = element_text(size = 14),
+        panel.grid = element_blank(),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 14),
+        aspect.ratio = 1,
+        panel.spacing = unit(0, "lines")
+  )
+)
+
+# * bar plot====
+setkey(incGlobeIncGrp_dt, incElas)
+incGlobeIncGrp_plot <- ggplot(data = incGlobeIncGrp_dt["ref"],
+                                aes(x = ssp)) +
+           geom_bar(
+             aes(y = incPerPers,
+                 fill = globe),
+             stat = "identity",
+             width = 0.4, 
+             position = "dodge",
+             color = "black"
+           ) + facet_wrap(~ region,
+                          nrow = 2) +
+           labs(fill = "",
+                y = "2050 per person income (US $, constant 2005)",
+                x = "Shared socioeconomic pathway (SSP)") +
+           theme_bw() + theme_opts +
+  scale_y_continuous(labels = comma) + 
+  scale_fill_grey() +
+  guides(fill = guide_legend(nrow = 1))
+
+# save plot
+ggsave(
+  file = "output_figSI11_globeIncome.tiff",
+  width = 12,
+  height = 8,
+  incGlobeIncGrp_plot,
+  compression = "lzw"
+)
+
+```
+
+
+
+```{r mapping, include=FALSE}
+# Description: map of projected % change in per person demand for ldf 
+
+
+# LOAD AND ORG DATA=============================================================
+
+# * load cty====
+if(!exists("ldfCtyProj_dt")) {
+  ldfCtyProj_dt <- readRDS(file = "procData_ldfCtyProj_dt.Rda")
+}
+
+# * organize data====
+
+# keep SSP2 with ref income elasticities
+# for each SSP in 2020 and 2050 for "food"
+
+mapLdfCty_dt <- ldfCtyProj_dt[scen == "SSP2_ref" &
+                                    (year == "2020" |
+                                       year == "2050") &
+                                    ldfUnit == "food", ]
+
+
+colnames(mapLdfCty_dt)
+names(mapLdfCty_dt)[names(mapLdfCty_dt) == "impCountry"] <- "country"
+
+# keep relevant columns
+mapLdfCty_dt <- mapLdfCty_dt[, c("cty",
+                                 "country",
+                                 "reg",
+                                 "year",
+                                 "ldf",
+                                 "demaPerPersKg",
+                                 "demaTot000Tons")]
+
+# long to wide
+mapLdfCty_dt <- dcast(mapLdfCty_dt,
+                        ldf + cty + country + reg ~ year,
+                        value.var = c("demaPerPersKg",
+                                      "demaTot000Tons"))
+
+# % change
+# 2020 to 2050
+nYrs <- 2050 - 2020
+
+# annual percent change, 2020 to 2050
+mapLdfCty_dt[, annPCPP20502020 := round(100 * ((demaPerPersKg_2050 / demaPerPersKg_2020) ^
+                                                      (1 / nYrs)- 1), 2)]
+
+mapLdfCty_dt[, annPCTot20502020 := round(100 * ((demaTot000Tons_2050 / demaTot000Tons_2020) ^
+                                                      (1 / nYrs)- 1), 2)]
+
+
+# convert long to wide so can merge all cty with map and no NA is given to
+# cty without data
+
+mapLdfCty_dt <- dcast(mapLdfCty_dt,
+                      country + cty ~ ldf,
+                      value.var = "annPCPP20502020")
+
+
+# rename column so can merge
+# add demand to iso cty list
+faoCtyReg_dt <- readRDS(file = "procData_faoCtyReg_dt.Rda")
+names(faoCtyReg_dt)[names(faoCtyReg_dt) == "isoCty"] <- "iso_a3"
+names(faoCtyReg_dt)[names(faoCtyReg_dt) == "impCountry"] <- "country"
+
+
+# each isoCty need a demand so merge on cty
+mapLdfCty_dt <- merge(faoCtyReg_dt, mapLdfCty_dt,
+      by = c("cty", "country"),
+      all= TRUE, 
+      allow.cartesian = TRUE)
+
+# MAP DATA TABLE================================================================
+
+# load raw data for map
+worldData_dt <- ne_countries(scale = "medium", returnclass = "sf")
+
+
+# merge map data with ldf data
+worldDataLdf_dt <- merge(mapLdfCty_dt,
+                         worldData_dt,
+                         by = "iso_a3",
+                         all.y  = TRUE)
+
+
+# keep needed columns
+worldDataLdf_dt <- worldDataLdf_dt[, c("geounit",
+                                       "Beef",
+                                       "Sheep",
+                                       "Pork",
+                                       "Poultry",
+                                       "Milk",
+                                       "Eggs",
+                                       "geometry")]
+
+# now wide to long so can use facet to plot
+worldDataLdf_dt <- melt(
+  worldDataLdf_dt,
+  id.vars = c("geounit",
+              "geometry"),
+  variable.name = "ldf",
+  value.name = "annPC20502020"
+)
+
+# order ldf
+worldDataLdf_dt$ldf <- ordered(worldDataLdf_dt$ldf,
+                               levels = c("Beef",
+                                          'Sheep',
+                                          "Pork",
+                                          "Poultry",
+                                          "Milk",
+                                          "Eggs"))
+
+# CREATE MAP====
+
+# * theme options====
+theme_opts <- theme(
+  plot.title = element_text(hjust = 0.5, size = 20),
+  panel.background = element_rect(fill = "white"),
+  strip.background = element_rect(fill = "white", color = "black", size = 0.5),
+  strip.text = element_text(size = 18),
+  panel.border = element_rect(color = "black", fill = NA, size = 0.5), 
+  legend.position = "bottom",
+  legend.text = element_text(size = 12),
+  legend.title = element_text(size = 16),
+  axis.text = element_blank(),
+  axis.title = element_text(size = 12),
+  axis.ticks = element_blank(),
+  panel.spacing = unit(0, "cm")
+  
+  
+)
+
+# * color scheme====
+# map is for discrete data, so need a discrete scale
+
+# range in whole numbers is -1 to 6
+min(worldDataLdf_dt$annPC20502020, na.rm = TRUE)
+
+max(worldDataLdf_dt$annPC20502020, na.rm = TRUE)
+
+{
+# list colors to use manually
+colorList7 <- c(
+  "#f0f0f0",
+  "#bdbdbd",
+  "#969696",
+  "#737373",
+  "#525252",
+  "#252525",
+  "#000000"
+)
+
+
+# * color bins====
+# discrete bins for data
+# range of values per color
+discScale1 <- "-1–0"
+discScale2 <- " 0–1"
+discScale3 <- " 1–2"
+discScale4 <- " 2–3"
+discScale5 <- " 3–4"
+discScale6 <- " 4–5"
+discScale7 <- " 5–6"
+
+
+worldDataLdf_dt[annPC20502020 <  0, annPC20502020F := discScale1]
+worldDataLdf_dt[annPC20502020 >=  0 &
+                 annPC20502020 < 1, annPC20502020F := discScale2]
+worldDataLdf_dt[annPC20502020 >=  1 &
+                 annPC20502020 < 2, annPC20502020F := discScale3]
+worldDataLdf_dt[annPC20502020 >=  2 &
+                 annPC20502020 < 3, annPC20502020F := discScale4]
+worldDataLdf_dt[annPC20502020 >=  3 &
+                 annPC20502020 < 4, annPC20502020F := discScale5]
+worldDataLdf_dt[annPC20502020 >=  4 &
+                 annPC20502020 < 5, annPC20502020F := discScale6]
+worldDataLdf_dt[annPC20502020 >=  5, annPC20502020F  := discScale7]
+
+
+# percent change as ordered factor
+worldDataLdf_dt$annPC20502020F <- ordered(worldDataLdf_dt$annPC20502020F,
+                               levels = c(discScale1,
+                                          discScale2,
+                                          discScale3,
+                                          discScale4,
+                                          discScale5,
+                                          discScale6,
+                                          discScale7
+                                          ))
+
+levels(worldDataLdf_dt$annPC20502020F)
+
+# map=====
+mapLdfGlo <- ggplot(worldDataLdf_dt) +
+  geom_sf(aes(fill     = annPC20502020F,
+              geometry = geometry),
+          colour   = "black") +
+  scale_fill_manual(
+    values  = colorList7,
+    na.value = "#ffffff",
+    guide = guide_legend(
+      direction = "horizontal",
+      nrow = 1,
+      byrow = TRUE,
+      label.position = "top",
+      keyheight = 2,
+      keywidth = 2,
+      title.vjust = 0.3
+    )
+  ) +
+  facet_wrap(~ ldf, ncol = 2) +
+  theme_opts +
+  theme(legend.text = element_text(margin = margin(r = 30, unit = "pt"))) +
+  labs(title = "",
+       x     = "",
+       y     = "",
+       fill  = "Annual percent change (2020 to 2050)") +
+  coord_sf(ylim = c(-60, 90),
+           expand = FALSE)
+
+# save map
+ggsave(
+    file = "output_figSI5_ldfPerChangPpsCty.tiff",
+    mapLdfGlo,
+    width  = 12,
+    height = 10,
+    compression = "lzw"
+    )
+
+
+}
+
+# summarize data
+# positive skew as mean is larger than median
+sumStat_dt <- data.table(worldDataLdf_dt)[, as.list(summary(annPC20502020, na.rm = TRUE)), 
+                            by = "ldf"]
+sumStat_dt <- data.frame(lapply(sumStat_dt, function(y) if(is.numeric(y)) round(y, 2) else y)) 
+
+fwrite(sumStat_dt, "output_tableSI2_ctySumStatPercChange.csv")
+
+
+```
+
+
+
+```{r plotting IPRs, include=FALSE}
+# Description: report intrinsic productivity growth rates (IPR) for LDFs
+
+# IPRs described:
+# https://doi.org/10.1088/1748-9326/10/8/085010
+
+# IMPACT3 calibrated to ssp2 but only with gdp and population changing
+# no change in IPRs or elasticities between SSPs
+
+
+# IPRs: LOAD AND ORGANIZE=======================================================
+
+ipr_dt <- fread("rawData_ipr_dt.csv")
+
+ipr_dt <- ipr_dt[LVSYS == "urban"]
+ipr_dt$LVSYS <- NULL
+setnames(ipr_dt, c("ldf", "fpu", "year", "ipr"))
+
+# change ldf names
+ipr_dt[ldf == "jbeef", ldf := "Beef"]
+ipr_dt[ldf == "jlamb", ldf := "Sheep"]
+ipr_dt[ldf == "jpork", ldf := "Pork"]
+ipr_dt[ldf == "jpoul", ldf := "Poultry"]
+ipr_dt[ldf == "jmilk", ldf := "Milk"]
+ipr_dt[ldf == "jeggs", ldf := "Eggs"]
+
+ipr_dt$year <- as.numeric(as.character(ipr_dt$year))
+ipr_dt <- ipr_dt[year >= 2020]
+
+# # add cty to fpu
+fpu2cty_dt <- fread("rawData_fpu2cty_dt.csv")
+
+setnames(fpu2cty_dt, c("fpu", "cty"))
+
+
+# add reg
+impCtyReg_dt <- readRDS(file = "procData_impCtyReg_dt.Rda")
+
+# merge
+ctyRegFpu_dt <- merge(fpu2cty_dt, impCtyReg_dt,
+                      by = "cty",
+                      all.x = TRUE)
+
+iprCty_dt <- merge(ipr_dt, ctyRegFpu_dt,
+                by = "fpu")
+
+iprCty_dt <- iprCty_dt[complete.cases(iprCty_dt), ]
+
+iprCty_dt <- iprCty_dt[, c("ldf", "year", "cty", "region", "ipr")]
+
+iprCtyAve_dt <- iprCty_dt[,. (aveIpr = mean(ipr)),
+                          by = .(ldf, cty, region)]
+
+globIpr_dt <- iprCtyAve_dt[,. (aveIpr = mean(aveIpr),
+                               minIpr = min(aveIpr),
+                               maxIpr = max(aveIpr),
+                               iqrIpr = IQR(aveIpr)),
+             by = .(ldf)]
+globIpr_dt
+
+regIpr_dt <- iprCtyAve_dt[,. (aveIpr = round(mean(aveIpr), 2),
+                               minIpr = round(min(aveIpr), 2),
+                               maxIpr = round(max(aveIpr), 2),
+                               iqrIpr = round(IQR(aveIpr), 2)),
+                           by = .(ldf, region)]
+regIpr_dt <- setorder(regIpr_dt, ldf)
+
+# plot
+ipr_plot <- ggplot(data = iprCtyAve_dt,
+           aes(x = ldf,
+             y = aveIpr)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  facet_wrap(~ region, nrow = 2) +
+  labs(x     = "Livestock-derived food",
+       y     = "Average annual\nintrinsic productivity growth rate (%) (2020 to 2050)") +
+  theme_bw() +
+  theme(
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(size = 12),
+    legend.key.size = unit(1, "cm"),
+    legend.position = "right",
+    legend.text  = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 12, angle = 90),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "cm"))
+
+
+ipr_plot
+
+# save plot
+ggsave(
+  file = "output_figSI10_ipr.tiff",
+  ipr_plot,
+  width  = 9,
+  height = 6,
+  compression = "lzw"
+)
+
+
+# TEST KCAL
+{
+QDX0_afg = 139 * 1000000
+QDX0_aus = 791 * 1000000
+QDX0_usa = 13520 * 1000000
+POPX0_afg = 27 * 1000000
+POPX0_aus = 20 * 1000000
+POPX0_usa = 296 * 1000000
+ppDemand_afg = QDX0_afg / POPX0_afg
+ppDemand_afg
+ppDemand_aus = QDX0_aus / POPX0_aus
+ppDemand_aus
+ppDemand_usa = QDX0_usa / POPX0_usa
+ppDemand_usa
+
+# kcal per person
+kcalPP_afg = 25.2 * 1000
+kcalPP_aus = 140 * 1000
+kcalPP_usa = 165.2 * 1000
+
+kcalPerKg_afg = kcalPP_afg / ppDemand_afg
+kcalPerKg_afg
+
+kcalPerKg_aus = kcalPP_aus / ppDemand_aus
+kcalPerKg_aus
+
+kcalPerKg_usa = kcalPP_usa / ppDemand_usa
+kcalPerKg_usa
+
+# bovine meat 291 kcal per 100 g GENuS for USA
+# so is about 2910 kcal per kg beef
+# beef is 290 for 100 g
+# https://www.nutritionix.com/food/beef
+
+}
+
+kcalPerKg_usa
+
+
+```
+
+
+
+```{r demand factors by WB, include=FALSE}
+# Description: factors of demand by WB income group
+
+
+# LOAD DATA====
+# * total demand====
+if(!exists("ldfCtyProj_dt")) {
+  ldfCtyProj_dt <- readRDS("procData_ldfCtyProj_dt.Rda")
+}
+
+setkey(ldfCtyProj_dt, year, scen, ldfUnit, ldf)
+rmCtyProj_dt <- ldfCtyProj_dt[CJ(
+  c("2020", "2050"),
+  c("SSP1_ref",
+    "SSP2_ref",
+    "SSP3_ref",
+    "SSP2_rm100LAllCty",
+    "SSP2_rm100LHiCty"),
+  "food",
+  c("Beef", "Sheep", "Pork"))]
+
+# * population====
+#popCtyProj_dt <- readRDS(file = "procData_popCtyProj_dt.Rda")
+popCtyProj_dt <- fread("rawData_popCtyProj_dt.csv")
+popCtyProj_dt$year <- as.character(popCtyProj_dt$year)
+
+setkey(popCtyProj_dt, year, scen)
+popCtyProj_dt <- popCtyProj_dt[CJ(
+  c("2020", "2050"),
+  c("SSP1_ref",
+    "SSP2_ref",
+    "SSP3_ref",
+    "SSP2_rm100LAllCty",
+    "SSP2_rm100LHiCty")
+)]
+
+# * income====
+income_dt <- readRDS(file = "procData_income_dt.Rda")
+
+# keep 2020 and 2050
+setkey(income_dt, year, scen)
+incCty_dt <- income_dt[CJ(
+  c("2020", "2050"),
+  c("SSP2_ref",
+    "SSP2_rm100LAllCty",
+    "SSP2_rm100LHiCty",
+    "SSP1_ref",
+    "SSP3_ref")
+)]
+
+# * price====
+
+prices_dt <- fread("rawData_prices_dt.csv")
+prices_dt$year <- as.character(prices_dt$year)
+colnames(prices_dt)
+
+# keep 2020 and 2050 for red meat
+setkey(prices_dt, year, c)
+rmPriceCty_dt <- prices_dt[CJ(
+  c("2020", "2050"),
+  c("cbeef", "clamb", "cpork"))]
+
+unique(rmPriceCty_dt$scen)
+
+# rename scenarios
+rmPriceCty_dt[scen == "PCX_SSP1_ref_dt", scen := "SSP1_ref"]
+rmPriceCty_dt[scen == "PCX_SSP2_ref_dt", scen := "SSP2_ref"]
+rmPriceCty_dt[scen == "PCX_SSP3_ref_dt", scen := "SSP3_ref"]
+rmPriceCty_dt[scen == "PCX_SSP2_rm100LAllCty_dt", scen := "SSP2_rm100LAllCty"]
+rmPriceCty_dt[scen == "PCX_SSP2_rm100LHiCty_dt", scen := "SSP2_rm100LHiCty"]
+
+names(rmPriceCty_dt)[names(rmPriceCty_dt) == "c"] <- "ldf"
+rmPriceCty_dt[ldf =="cbeef", ldf := "Beef"]
+rmPriceCty_dt[ldf =="clamb", ldf := "Sheep"]
+rmPriceCty_dt[ldf =="cpork", ldf := "Pork"]
+
+# * merge====
+# merge demand and price as both endogenous
+rmDemaPriceCty_dt <- merge(rmCtyProj_dt, rmPriceCty_dt,
+                        by = c("scen", "ldf", "cty", "year"),
+                        all = TRUE)
+
+# complete cases
+rmDemaPriceCty_dt <- rmDemaPriceCty_dt[complete.cases(rmDemaPriceCty_dt), ]
+
+# high income vs not high income column
+rmDemaPriceCty_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "low- & middle-income countries"]
+rmDemaPriceCty_dt[(wbCtyIncClass == "High income"), wbCtyIncClass := "high-income countries"]
+
+rmDemaPriceCty_dt[, valueDema := demaTot000Tons * price]
+
+
+# by income group
+rmDemaPriceIncGrp_dt <-
+  rmDemaPriceCty_dt[, .(demaTot000Tons =  sum(demaTot000Tons),
+                        valueDema =  sum(valueDema)),
+                    by = .(scen, ldf, year, wbCtyIncClass)]
+rmDemaPriceIncGrp_dt[, price :=  valueDema / demaTot000Tons]
+
+# all world
+rmDemaPriceWld_dt <-
+  rmDemaPriceCty_dt[, .(demaTot000Tons =  sum(demaTot000Tons),
+                        valueDema =  sum(valueDema)),
+                    by = .(scen, ldf, year)]
+rmDemaPriceWld_dt[, price :=  valueDema / demaTot000Tons]
+
+# population by income group
+# high income vs not high income column
+popCtyProj_dt[!(wbCtyIncClass == "High income"), wbCtyIncClass := "low- & middle-income countries"]
+popCtyProj_dt[wbCtyIncClass == "High income", wbCtyIncClass := "high-income countries"]
+
+# by income group
+popIncGrp_dt <-
+  popCtyProj_dt[, .(pop000Peop =  sum(pop000Peop)),
+                    by = .(scen, year, wbCtyIncClass)]
+popWld_dt <-
+  popCtyProj_dt[, .(pop000Peop =  sum(pop000Peop)),
+                by = .(scen, year)]
+
+# add pop to total demand so can compute per person demand
+
+# by income group
+rmDemaPriceIncGrp_dt <- merge(rmDemaPriceIncGrp_dt, popIncGrp_dt,
+                              by = c("scen", "year", "wbCtyIncClass"))
+rmDemaPriceIncGrp_dt[, demaPerPersKg := (demaTot000Tons * 1000 * 1000) / (pop000Peop *
+                                                                       1000)]
+rmDemaPriceIncGrp_dt$valueDema <- NULL
+rmDemaPriceIncGrp_dt$pop000Peop <- NULL
+rmDemaPriceIncGrp_dt <- dcast(rmDemaPriceIncGrp_dt,
+                              scen + year + wbCtyIncClass ~ ldf,
+                              value.var = c("demaTot000Tons", "demaPerPersKg", "price"))
+rmDemaPriceIncGrp_dt <- melt(rmDemaPriceIncGrp_dt,
+                             id.vars = c("scen", "year", "wbCtyIncClass"))
+
+# for world
+rmDemaPriceWld_dt <- merge(rmDemaPriceWld_dt, popWld_dt,
+                              by = c("scen", "year"))
+rmDemaPriceWld_dt[, demaPerPersKg := (demaTot000Tons * 1000 * 1000) / (pop000Peop *
+                                                                            1000)]
+rmDemaPriceWld_dt$valueDema <- NULL
+rmDemaPriceWld_dt$pop000Peop <- NULL
+rmDemaPriceWld_dt <- dcast(rmDemaPriceWld_dt,
+                              scen + year ~ ldf,
+                              value.var = c("demaTot000Tons", "demaPerPersKg", "price"))
+rmDemaPriceWld_dt <- melt(rmDemaPriceWld_dt,
+                             id.vars = c("scen", "year"))
+
+# merge population and income by income group
+incPopCty_dt <- merge(incCty_dt, popCtyProj_dt,
+                       by = c("scen", "cty", "year"),
+                       all = TRUE)
+incPopIncGrp_dt <-
+  incPopCty_dt[, .(pop000Peop =  sum(pop000Peop),
+                   incTot = sum(incTot)),
+                by = .(scen, year, wbCtyIncClass)]
+incPopIncGrp_dt[ , perPersInc := (incTot * 1000 * 1000000)/
+                (pop000Peop * 1000) ]
+incPopIncGrp_dt$incTot <- NULL
+incPopIncGrp_dt <- melt(incPopIncGrp_dt,
+                        id.vars = c("scen", "year", "wbCtyIncClass"))
+
+# merge population and income all World
+incPopWld_dt <-
+  incPopCty_dt[, .(pop000Peop =  sum(pop000Peop),
+                   incTot = sum(incTot)),
+               by = .(scen, year)]
+incPopWld_dt[ , perPersInc := (incTot * 1000 * 1000000)/
+                   (pop000Peop * 1000) ]
+incPopWld_dt$incTot <- NULL
+incPopWld_dt <- melt(incPopWld_dt,
+                        id.vars = c("scen", "year"))
+
+
+
+rmDemaFactIncGrp_dt <- rbind(incPopIncGrp_dt, rmDemaPriceIncGrp_dt)
+rmDemaFactWld_dt <- rbind(incPopWld_dt, rmDemaPriceWld_dt)
+rmDemaFactWld_dt$wbCtyIncClass <- "all countries"
+
+rmDemaFact_dt <- rbind(rmDemaFactIncGrp_dt, rmDemaFactWld_dt)
+rmDemaFact_dt <- dcast(rmDemaFact_dt,
+                       scen + wbCtyIncClass + variable ~ year)
+
+rmDemaFact_dt[, percChange := 100 * (`2050` - `2020`) / `2020`]
+
+
+
+# * plot demand factors====
+# theme
+theme_opts <- list(
+  theme(
+    strip.background = element_rect(fill = "white"),
+    strip.text.x = element_text(size = 10),
+    legend.position = "bottom",
+    legend.text  = element_text(size = 12),
+    legend.title = element_text(size = 14),
+    legend.key = element_rect(color = NA, fill = NA),
+    legend.key.size = unit(0.5, "cm"),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 90, vjust = 0),
+    axis.text.y = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    aspect.ratio = 1,
+    panel.spacing = unit(0, "lines")
+  ))
+
+# rename all factors
+levels(rmDemaFact_dt$variable) <-
+  c(
+    "population",
+    "per person income",
+    "total demand beef",
+    "total demand pork",
+    "total demand sheep",
+    "per person demand beef",
+    "per person demand pork",
+    "per person demand sheep",
+    "price beef",
+    "price pork",
+    "price sheep"
+  )
+
+# variable as ordered factor
+rmDemaFact_dt$variable <-
+  factor(
+    rmDemaFact_dt$variable,
+    ordered = TRUE,
+    levels = c(
+      "total demand beef",
+      "total demand sheep",
+      "total demand pork",
+      "per person demand beef",
+      "per person demand sheep",
+      "per person demand pork",
+      "price beef",
+      "price sheep",
+      "price pork",
+      "per person income",
+      "population"
+      )
+  )
+
+
+# rename with scenario long names
+rmDemaFact_dt[scen == "SSP1_ref", 
+              scenL := "SSP1 & reference values"]
+rmDemaFact_dt[scen == "SSP2_ref",
+              scenL := "SSP2 & reference values"]
+rmDemaFact_dt[scen == "SSP3_ref",
+              scenL := "SSP3 & reference values"]
+
+rmDemaFact_dt[scen == "SSP2_rm100LAllCty",
+              scenL := "SSP2 & 100% lower all cty"]
+rmDemaFact_dt[scen == "SSP2_rm100LHiCty",
+              scenL := "SSP2 & 100% lower HIC"]
+
+# scenario long names as ordered factor
+rmDemaFact_dt$scenL <-
+  factor(
+    rmDemaFact_dt$scenL,
+    ordered = TRUE,
+    levels = c(
+      "SSP1 & reference values",
+      "SSP2 & reference values",
+      "SSP2 & 100% lower HIC",
+      "SSP2 & 100% lower all cty",
+      "SSP3 & reference values"
+    )
+  )
+
+# scenario colors
+
+# for SSPs, match to previous figs
+brewColorSsp <- brewer.pal(11, name = 'BrBG')
+
+# for SSP2 variants use shades of grey
+scenColor <- c(brewColorSsp[[8]],  # SSP1
+               "#ffffff",          # SSP2
+               "#bdbdbd",          # SSP2 100% lower HIC
+               "#525252",          # SSP2 100% lower all cty
+               brewColorSsp[[3]])  # SSP3
+
+
+{
+dodge <- position_dodge(width = 0.7)
+  
+  demaFact_plot <- ggplot(data = rmDemaFact_dt, 
+                              aes(x = variable)) +
+    geom_bar(
+      aes(y = percChange,
+          fill = scenL),
+      stat = "identity",
+      width = 0.5, 
+      position = dodge,
+      color = "black",
+      size = 0.3) +
+    coord_flip() +
+    scale_x_discrete(labels = wrap_format(15)) +
+    facet_wrap(~ wbCtyIncClass, 
+               scales = "free_x",
+               nrow = 1) + 
+    labs(y = "Percent change between 2020 and 2050",
+         x     = " ",
+         fill = "Income and its elasticty") +
+    scale_fill_manual(values = scenColor) +
+    theme_bw() + theme_opts + 
+    guides(fill = guide_legend(direction = "vertical", 
+                               nrow = 2)) 
+  # save plot
+  ggsave(
+    file = "output_fig5_demaFact.tiff",
+    width = 10,
+    height = 5,
+    demaFact_plot,
+    compression = "lzw"
+  )
+  
+  }
+
+# * plot prices====
+
+setkey(rmDemaFact_dt, variable)
+rmPrice_dt <- rmDemaFact_dt[ c("price beef",
+                              "price pork",
+                              "price sheep")]
+rmPrice_dt$percChange <- NULL
+names(rmPrice_dt)[names(rmPrice_dt) == "variable"] <- "price"
+
+rmPrice_dt <- melt(rmPrice_dt,
+                   id.vars = c("wbCtyIncClass",
+                               "scen",
+                               'scenL',
+                               "price"),
+                   variable.factor = FALSE,
+                   variable.name = "year")
+
+# rename with scenario long names
+rmPrice_dt[scen == "SSP1_ref", scen := "SSP1"]
+rmPrice_dt[scen == "SSP2_ref", scen := "SSP2"]
+rmPrice_dt[scen == "SSP3_ref", scen := "SSP3"]
+
+rmPrice_dt[scen == "SSP2_rm100LAllCty", scen := "SSP2 100% lower all cty"]
+rmPrice_dt[scen == "SSP2_rm100LHiCty", scen := "SSP2 100% lower HIC"]
+
+# scenario long names as ordered factor
+rmPrice_dt$scen <-
+  factor(
+    rmPrice_dt$scen,
+    ordered = TRUE,
+    levels = c(
+      "SSP3",
+      "SSP2 100% lower HIC",
+      "SSP2 100% lower all cty",
+      "SSP2",
+      "SSP1"
+    )
+  )
+
+rmPrice_dt[price == "price beef", price := "beef"]
+rmPrice_dt[price == "price sheep", price := "sheep"]
+rmPrice_dt[price == "price pork", price := "pork"]
+
+rmPrice_dt$price <-
+  factor(
+    rmPrice_dt$price,
+    ordered = TRUE,
+    levels = c(
+      "beef",
+      "sheep",
+      "pork"
+    )
+  )
+
+  # plot
+  redMeatPrices_plot <- ggplot(data = rmPrice_dt, 
+                              aes(x = value / 1000,
+                                  y = scen,
+                                  shape = year,
+                                  color = year)) +
+    geom_point(size = 2, stroke = 1) +
+    geom_hline(aes(yintercept = as.integer(rmPrice_dt$scen)),
+               color = "gray", size = 0.3,
+               linetype = "dashed") +
+    facet_wrap(price ~ wbCtyIncClass) + 
+    scale_y_discrete(labels = wrap_format(15)) +
+    scale_x_continuous(labels = scales::number_format(accuracy = 1)) +
+    labs(shape = "Year",
+         color = "Year",
+         x = expression(
+      atop(textstyle("Price ($ kg"^-1*")"))),
+      y     = "Scenario") +
+    theme_bw() + theme_opts +
+    guides(shape = guide_legend(nrow = 1, 
+                                override.aes = list(size = 6))) +
+    theme(legend.margin = margin(t = -0.5, r = 0, b = -0.1, l = 0, unit = "cm"),
+          legend.key.height = unit(0, "cm")) +
+    scale_color_manual(values = c("#2c7bb6", "#fdae61")) +
+    scale_shape_manual(values = c(16, 2))
+  
+    # save plot
+  ggsave(
+    file = "output_figSI9_redMeatPrices.tiff",
+    width = 9,
+    height = 9,
+    redMeatPrices_plot,
+    compression = "lzw"
+  )
+  
+
+```
+
+
+
+```{r print tables and figures, echo=FALSE}
+
+incElasRegAsfYr_plot
+
+protDemaPersRegYr
+
+ldfPerPersReg
+
+protDemaTotRegYr
+
+demaFact_plot
+
+
+table1 <- data.frame(lapply(incPopRange_tab, function(x) {
+  if (is.character(x)) iconv(x, from = "", to = "UTF-8", sub = "byte") else x
+}), stringsAsFactors = FALSE)
+
+knitr::kable(table1, "pipe")
+
+table2 <- data.frame(lapply(ldfRegPpsWideTab_dt, function(x) {
+  if (is.character(x)) iconv(x, from = "", to = "UTF-8", sub = "byte") else x
+}), stringsAsFactors = FALSE)
+
+knitr::kable(table2, "pipe")
+
+table3 <- data.frame(lapply(redMeatSSPElast_dt, function(x) {
+  if (is.character(x)) iconv(x, from = "", to = "UTF-8", sub = "byte") else x
+}), stringsAsFactors = FALSE)
+
+knitr::kable(table3, "pipe")
+
+```
+
+
+```{r master file and list of additional tables and figures, eval=FALSE, echo=FALSE}
+
+#Master File
+
+# Description: this is the master file that runs all scripts in 'project_ldfDemand.Rproj' 
+# sequentially from start to finish to reproduce all tables and figures that
+# report results in the study 
+# The simulation results were generated in GAMS and therefore outside of this script, 
+# please direct questions on the GAMS code and input data to the author
+
+# list all R files in project
+fileNames <- list.files(pattern = "R$")
+class(fileNames)
+fileNames
+# number of files in "scripts" folder to run 
+# minus one as don't need to run the masterFile twice
+# minus N if don't want to run last N files
+nFiles <- length(fileNames) - 1
+nFiles
+
+# time all script run time
+startTimingAll <- proc.time()
+
+# run all files in the "scripts" folder
+for (i in 1:nFiles) {
+  source(paste0(fileNames[i], sep = ""), echo = TRUE)
+}
+
+timeAll <- proc.time() - startTimingAll
+timeAll
+
+
+
+#Additional tables and figures
+
+incEProjHistCo_plot
+incElasWBAsfYr_plot
+priceElas_plot
+sspPopInc_plot
+mapLdfGlo
+ldfRegContTot_plot
+ldfObsSimPerPersRegYr
+ldfTotReg
+redMeatPrices_plot
+ipr_plot
+incGlobeIncGrp_plot
+protPerc_Tab
+sumStat_dt
+ldfRegTotTab_dt
+redMeatAv_dt
+ldfCtyProjIncECty_dt
+
+```
